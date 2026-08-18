@@ -1,0 +1,23 @@
+{
+  "id": "alesis-strata-prime",
+  "name": "Alesis Strata Prime",
+  "manufacturer": "Alesis",
+  "verified": false,
+  "source": "BRAIN-001 Finding 2; PRIME Drum Module User Guide v1.0.2 appendix 6.2 (hardware-unverified)",
+  "notes": {
+    "24": "kick",
+    "38": "tom_hi",
+    "35": "tom_mid",
+    "50": "ride",
+    "41": "crash_l",
+    "43": "crash_l",
+    "45": "crash_r",
+    "47": "crash_r"
+  },
+  "hihat": {
+    "pedal_cc": null,
+    "open": "hh_open",
+    "closed": "hh_closed",
+    "pedal": "hh_pedal"
+  }
+}
