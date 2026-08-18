@@ -117,6 +117,13 @@ export async function loadSettings() {
     _setLibraryProfile(data.active_instrument_profile);
     const pathwayEl = document.getElementById('setting-instrument-pathway');
     if (pathwayEl) pathwayEl.value = _normalizeInstrumentPathway(data.pathway);
+    // INIT-001/SPEC-004: hydrate Main instrument. Omitted/unknown → Not set.
+    const playerInstEl = document.getElementById('setting-player-instrument');
+    if (playerInstEl) {
+        const raw = data.player_instrument;
+        playerInstEl.value = (raw === 'guitar' || raw === 'bass' || raw === 'drums'
+            || raw === 'keys' || raw === 'vocals') ? raw : '';
+    }
     const demucsEl = document.getElementById('demucs-server-url');
     if (demucsEl) demucsEl.value = data.demucs_server_url || '';
     const leftyEl = document.getElementById('setting-lefty');
@@ -699,6 +706,21 @@ export function setInstrumentPathway(value) {
     const el = document.getElementById('setting-instrument-pathway');
     if (el) el.value = pathway;
     persistSetting('pathway', pathway).then(() => {
+        if (window.v3Badges && typeof window.v3Badges.reload === 'function') {
+            try { window.v3Badges.reload(); } catch (_) { /* noop */ }
+        }
+    });
+}
+
+const PLAYER_INSTRUMENTS = ['guitar', 'bass', 'drums', 'keys', 'vocals'];
+
+// INIT-001/SPEC-004: persist additive player_instrument (null unsets). Reloads
+// the topbar badges so the tuner/tour gates flip without a page reload.
+export function setPlayerInstrument(value) {
+    const next = PLAYER_INSTRUMENTS.includes(value) ? value : null;
+    const el = document.getElementById('setting-player-instrument');
+    if (el) el.value = next || '';
+    persistSetting('player_instrument', next).then(() => {
         if (window.v3Badges && typeof window.v3Badges.reload === 'function') {
             try { window.v3Badges.reload(); } catch (_) { /* noop */ }
         }

@@ -451,6 +451,26 @@
                             </select>
                         </div>
                     </div>
+                    <!-- INIT-001/SPEC-004: additive main-instrument identity. Does not
+                         widen the guitar/bass `instrument` key. Unset = today's UI. -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.79 2-4 2s-4-.895-4-2 1.79-2 4-2 4 .895 4 2zm12-3c0 1.105-1.79 2-4 2s-4-.895-4-2 1.79-2 4-2 4 .895 4 2zM9 10l12-3"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Main instrument</div>
+                            <div class="fb-srow-desc">What you play most. Drums hides the tuner badge and skips the tune-up tour step. Not set keeps today's behavior.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <select id="setting-player-instrument" aria-label="Main instrument" onchange="setPlayerInstrument(this.value)"
+                                class="bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                                <option value="">Not set</option>
+                                <option value="guitar">Guitar</option>
+                                <option value="bass">Bass</option>
+                                <option value="drums">Drums</option>
+                                <option value="keys">Keys</option>
+                                <option value="vocals">Vocals</option>
+                            </select>
+                        </div>
+                    </div>
                     <!-- Instrument pathway -->
                     <div class="fb-srow">
                         <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-1.447-.894L15 4m0 13V4m0 0L9 7"/></svg></span>

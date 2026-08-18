@@ -123,3 +123,23 @@ test('a failed save does not block later saves on the chain', async () => {
     await flush();
     assert.equal(sandbox.status.textContent, 'Settings saved', 'later save still reports success');
 });
+
+test('INIT-001/SPEC-004: persistSetting posts player_instrument including null unset', async () => {
+    const src = fs.readFileSync(APP_JS, 'utf8');
+    const sandbox = buildSandbox();
+    loadFunctions(sandbox, src);
+
+    sandbox.__persistSetting('player_instrument', 'drums');
+    await flush();
+    assert.equal(sandbox.pending.length, 1);
+    assert.deepEqual(sandbox.pending[0].body, { player_instrument: 'drums' });
+    ok(sandbox.pending[0]);
+    await flush();
+
+    sandbox.__persistSetting('player_instrument', null);
+    await flush();
+    assert.equal(sandbox.pending.length, 2);
+    assert.deepEqual(sandbox.pending[1].body, { player_instrument: null });
+    ok(sandbox.pending[1]);
+    await flush();
+});

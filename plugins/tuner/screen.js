@@ -362,6 +362,18 @@
         if (_autoplayRelease) { try { _autoplayRelease(); } catch (_) { /* */ } _autoplayRelease = null; }
     }
 
+    // INIT-001/SPEC-004: host helper (player_instrument === 'drums') blocks the
+    // remaining automatic enable()/mic path. Missing helper → SPEC-003 baseline.
+    function _drumsBlocksTunerAutoStart() {
+        try {
+            const api = window.v3Badges;
+            if (api && typeof api.shouldAutoStartTunerAudio === 'function') {
+                return api.shouldAutoStartTunerAudio() === false;
+            }
+        } catch (_) { /* host helper optional */ }
+        return false;
+    }
+
     function _onAutoOpenSongLoadingHandler() {
         _autoOpenGeneration++;
         _autoOpenDismissedSessionKey = null;
@@ -372,6 +384,7 @@
         // song:ready if we don't open, or when the tuner is dismissed.
         _releaseGate();
         _gateClaimed = false;
+        if (_drumsBlocksTunerAutoStart()) return;
         _autoplayRelease = (_state._serverConfig && _state._serverConfig.autoOpenOnTuningChange
             && window.feedBack && typeof window.feedBack.holdAutoplay === 'function')
             ? window.feedBack.holdAutoplay() : null;
@@ -385,6 +398,7 @@
         // boot still reads the real flag; fail closed if it can't load.
         if (!_state._serverConfig) { try { await loadConfig(); } catch (_) { /* */ } }
         if (!_state._serverConfig || !_state._serverConfig.autoOpenOnTuningChange) return;
+        if (_drumsBlocksTunerAutoStart()) return;
 
         const songInfo = window.highway?.getSongInfo?.() || window.feedBack?.currentSong;
         if (!songInfo) return;

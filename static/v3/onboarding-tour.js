@@ -25,7 +25,7 @@
     // waitFor blocks the step until its target exists, so the async dashboard
     // re-render kicked off by 'v3:profile-updated' can't race the first step.
     function buildSteps() {
-        return [
+        var steps = [
             {
                 id: 'hero', shape: 'spotlight', position: 'bottom',
                 selector: '#v3-hero', waitFor: '#v3-hero',
@@ -69,6 +69,21 @@
                 content: 'Browse your full library, lessons and plugins anytime. You can replay this tour from the ? button in the corner.',
             },
         ];
+        var inst = null;
+        try {
+            if (window.v3Badges && typeof window.v3Badges.getPlayerInstrument === 'function') {
+                inst = window.v3Badges.getPlayerInstrument();
+            }
+        } catch (e) { inst = null; }
+        return filterTourSteps(steps, inst);
+    }
+
+    // INIT-001/SPEC-004: skip the tuner spotlight when drums. Unset / guitar /
+    // keys / vocals keep the SPEC-003 step list (tuner included).
+    function filterTourSteps(steps, playerInstrument) {
+        var list = Array.isArray(steps) ? steps : [];
+        if (playerInstrument !== 'drums') return list.slice();
+        return list.filter(function (s) { return !s || s.id !== 'tuner'; });
     }
 
     function register() {
@@ -133,7 +148,12 @@
         sm.on('screen:changed', onScreen);
     }
 
-    window.v3OnboardingTour = { startFirstRun: startFirstRun, armPendingFirstRun: armPendingFirstRun };
+    window.v3OnboardingTour = {
+        startFirstRun: startFirstRun,
+        armPendingFirstRun: armPendingFirstRun,
+        filterTourSteps: filterTourSteps,
+        buildSteps: buildSteps,
+    };
 
     // tour-engine.js assigns window.feedBackTour at script-eval time, so if it
     // is loaded before us register() succeeds immediately; otherwise retry once
