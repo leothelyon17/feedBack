@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Canonical drum kit mapping (#127).** Device MIDI notes resolve to
+  piece-ids through an additive kit layer (`note_to_piece`); with no kit
+  active the path is byte-identical to today's GM `midi_to_piece()`. Ships an
+  unverified Alesis Strata Prime preset as data (`verified: false`).
+- **Tuner badge presence gate and gestured mic start.** The v3 tuner badge
+  renders only when the tuner plugin is loaded; mic/`AudioContext` start waits
+  for a user gesture instead of firing at boot.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the
