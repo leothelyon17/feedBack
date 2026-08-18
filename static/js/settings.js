@@ -716,13 +716,15 @@ const PLAYER_INSTRUMENTS = ['guitar', 'bass', 'drums', 'keys', 'vocals'];
 
 // INIT-001/SPEC-004: persist additive player_instrument (null unsets). Reloads
 // the topbar badges so the tuner/tour gates flip without a page reload.
+// Return the reload promise so restore finishes (badge + tour re-filter)
+// before callers continue — fire-and-forget left restore racing the next paint.
 export function setPlayerInstrument(value) {
     const next = PLAYER_INSTRUMENTS.includes(value) ? value : null;
     const el = document.getElementById('setting-player-instrument');
     if (el) el.value = next || '';
-    persistSetting('player_instrument', next).then(() => {
+    return persistSetting('player_instrument', next).then(() => {
         if (window.v3Badges && typeof window.v3Badges.reload === 'function') {
-            try { window.v3Badges.reload(); } catch (_) { /* noop */ }
+            return window.v3Badges.reload();
         }
     });
 }
