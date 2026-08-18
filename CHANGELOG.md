@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Drum kit HTTP surface and player instrument setting (#127).** `/api/drums/vocabulary` and kit CRUD persist user kits under `{config_dir}/drums/` with path containment. Additive `player_instrument` and `active_kit` settings do not widen `instrument`.
+- **3D drum highway vocabulary consume.** The bundled 3D highway overlays core piece-ids and `active_kit` when the API is available, and keeps local `MIDI_TO_PIECE` / `drum_h3d_kit_v1` as fallbacks.
 - **Canonical drum kit mapping (#127).** Device MIDI notes resolve to
   piece-ids through an additive kit layer (`note_to_piece`); with no kit
   active the path is byte-identical to today's GM `midi_to_piece()`. Ships an
