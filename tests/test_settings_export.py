@@ -771,3 +771,68 @@ def test_atomic_write_closes_fd_when_fdopen_fails(server_mod, tmp_path, monkeypa
     # created was removed (so it doesn't litter / lock on Windows).
     assert closed_fds, "raw fd was never closed after fdopen failure"
     assert list(tmp_path.glob("*.tmp.import")) == []
+
+
+# ── User drum kits round-trip with the settings bundle (INIT-001/SPEC-002) ──
+
+def test_export_includes_user_drums_kits(client, tmp_path):
+    drums_dir = tmp_path / "drums"
+    drums_dir.mkdir()
+    kit = {
+        "id": "export-kit",
+        "name": "Export Kit",
+        "verified": False,
+        "notes": {"38": "snare"},
+    }
+    (drums_dir / "export-kit.json").write_text(json.dumps(kit))
+
+    core = client.get("/api/settings/export").json()["core_server_files"]
+    assert "drums/export-kit.json" in core
+    entry = core["drums/export-kit.json"]
+    assert entry["encoding"] == "json"
+    assert entry["data"]["id"] == "export-kit"
+
+
+def test_import_restores_user_drums_kits(client, tmp_path):
+    kit = {
+        "id": "imported-kit",
+        "name": "Imported Kit",
+        "verified": False,
+        "notes": {"36": "kick"},
+    }
+    r = client.post("/api/settings/import", json={
+        "schema": settings_router.SETTINGS_BUNDLE_SCHEMA,
+        "server_config": {},
+        "core_server_files": {
+            "drums/imported-kit.json": {"encoding": "json", "data": kit},
+        },
+    })
+    assert r.status_code == 200, r.json()
+    on_disk = tmp_path / "drums" / "imported-kit.json"
+    assert on_disk.is_file()
+    assert json.loads(on_disk.read_text())["id"] == "imported-kit"
+
+
+def test_import_rejects_oversized_or_polluted_drums_kit(client, tmp_path):
+    huge = {"id": "bad-kit", "name": "x" * (64 * 1024), "notes": {"38": "snare"}}
+    r = client.post("/api/settings/import", json={
+        "schema": settings_router.SETTINGS_BUNDLE_SCHEMA,
+        "server_config": {},
+        "core_server_files": {
+            "drums/bad-kit.json": {"encoding": "json", "data": huge},
+        },
+    })
+    assert r.status_code in (400, 413), r.json()
+    assert not (tmp_path / "drums" / "bad-kit.json").exists()
+
+    polluted = {"id": "bad-kit", "name": "x", "notes": {"38": "snare"}, "__proto__": {"x": 1}}
+    r = client.post("/api/settings/import", json={
+        "schema": settings_router.SETTINGS_BUNDLE_SCHEMA,
+        "server_config": {},
+        "core_server_files": {
+            "drums/bad-kit.JSON": {"encoding": "json", "data": polluted},
+        },
+    })
+    assert r.status_code == 400, r.json()
+    assert not (tmp_path / "drums" / "bad-kit.JSON").exists()
+    assert not (tmp_path / "drums" / "bad-kit.json").exists()

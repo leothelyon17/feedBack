@@ -10,6 +10,7 @@ artist-links code), and _running_version->appstate.running_version().
 import json
 import math
 import os
+import re
 import sqlite3
 import tempfile
 import threading
@@ -21,6 +22,7 @@ from fastapi.responses import JSONResponse
 import appstate
 import sloppak as sloppak_mod
 from appconfig import _load_config
+from drums import SHIPPED_KITS_DIR, load_kits
 from metadata_db import _as_int, _sqlite_file_integrity_ok
 from tunings import (
     PROFILE_IDS, PROFILE_PATHWAYS, apply_flat_instrument_patch_to_profiles,
@@ -32,14 +34,38 @@ import logging
 log = logging.getLogger("feedBack.server")
 router = APIRouter()
 
+# INIT-001/SPEC-002 — additive player identity; never widen `instrument`.
+_PLAYER_INSTRUMENTS = frozenset({"guitar", "bass", "drums", "keys", "vocals"})
+_KIT_ID_RE = re.compile(r"^[a-z0-9-]+$")
+
 # Serializes the read-modify-write in save_settings(). See the note there.
 _settings_lock = threading.Lock()
+
+
+def _player_error(message: str, status_code: int = 400) -> JSONResponse:
+    return JSONResponse({"error": message}, status_code=status_code)
+
+
+def _known_kit_ids() -> set[str]:
+    return set(load_kits(SHIPPED_KITS_DIR, appstate.config_dir / "drums"))
+
+
+def _surface_player_keys(out: dict) -> dict:
+    """Expose player_instrument / active_kit only when set to a valid value."""
+    pi = out.get("player_instrument")
+    if pi not in _PLAYER_INSTRUMENTS:
+        out.pop("player_instrument", None)
+    ak = out.get("active_kit")
+    if not (isinstance(ak, str) and _KIT_ID_RE.fullmatch(ak)):
+        out.pop("active_kit", None)
+    return out
 
 
 @router.get("/api/settings")
 def get_settings():
     cfg = _load_config(appstate.config_dir / "config.json")
-    return settings_with_instrument_profiles(cfg if cfg is not None else appstate.default_settings())
+    out = settings_with_instrument_profiles(cfg if cfg is not None else appstate.default_settings())
+    return _surface_player_keys(out)
 
 
 @router.post("/api/settings")
@@ -247,6 +273,30 @@ def save_settings(data: dict):
             if not isinstance(raw, str) or raw not in ("guitar", "bass"):
                 return {"error": "instrument must be 'guitar' or 'bass'"}
             updates["instrument"] = raw
+    # INIT-001/SPEC-002 — additive, default-unset. Null removes the key so
+    # existing installs stay a no-op. Does not widen `instrument`.
+    unset_player_instrument = False
+    if "player_instrument" in data:
+        raw = data["player_instrument"]
+        if raw is None:
+            unset_player_instrument = True
+        elif not isinstance(raw, str) or raw not in _PLAYER_INSTRUMENTS:
+            return _player_error(
+                "player_instrument must be one of guitar, bass, drums, keys, vocals"
+            )
+        else:
+            updates["player_instrument"] = raw
+    unset_active_kit = False
+    if "active_kit" in data:
+        raw = data["active_kit"]
+        if raw is None:
+            unset_active_kit = True
+        elif not isinstance(raw, str) or not _KIT_ID_RE.fullmatch(raw):
+            return _player_error("active_kit must be a known kit id")
+        elif raw not in _known_kit_ids():
+            return _player_error("unknown kit id")
+        else:
+            updates["active_kit"] = raw
     if "string_count" in data:
         raw = data["string_count"]
         if raw is not None:
@@ -321,6 +371,10 @@ def save_settings(data: dict):
         if cfg is None:
             cfg = appstate.default_settings()
         cfg.update(updates)
+        if unset_player_instrument:
+            cfg.pop("player_instrument", None)
+        if unset_active_kit:
+            cfg.pop("active_kit", None)
         if _profile_patch is not None:
             # Merge the validated partial over the persisted profiles so a
             # single-profile update leaves the others intact (a fresh config
@@ -365,6 +419,7 @@ _RESETTABLE_SETTINGS_KEYS = frozenset({
     "av_offset_ms", "countdown_before_song", "miss_penalty", "fail_behavior",
     "reference_pitch", "instrument", "string_count", "tuning", "pathway",
     "instrument_profiles", "active_instrument_profile",
+    "player_instrument", "active_kit",
     "achievements_enabled", "use_amp_sims",
 })
 
@@ -484,6 +539,14 @@ def _validate_server_config_types(cfg: dict) -> str | None:
         v = cfg["active_instrument_profile"]
         if v is not None and (not isinstance(v, str) or v not in PROFILE_IDS):
             return "server_config.active_instrument_profile must be one of guitar-lead, guitar-rhythm, bass"
+    if "player_instrument" in cfg:
+        v = cfg["player_instrument"]
+        if v is not None and v not in _PLAYER_INSTRUMENTS:
+            return "server_config.player_instrument must be one of guitar, bass, drums, keys, vocals"
+    if "active_kit" in cfg:
+        v = cfg["active_kit"]
+        if v is not None and (not isinstance(v, str) or not _KIT_ID_RE.fullmatch(v)):
+            return "server_config.active_kit must be a kit id"
     return None
 
 
@@ -778,7 +841,7 @@ def _atomic_write_file(target: Path, payload: bytes):
 _CORE_LIBRARY_DB = "web_library.db"
 
 
-_CORE_EXPORT_ART_DIRS = ("playlist_covers/", "avatars/")
+_CORE_EXPORT_ART_DIRS = ("playlist_covers/", "avatars/", "drums/")
 
 
 _CORE_IMPORT_ALLOWED = (_CORE_LIBRARY_DB,) + _CORE_EXPORT_ART_DIRS
@@ -1075,6 +1138,16 @@ def import_settings(bundle: dict):
                 {"ok": False, "error": "core_server_files: web_library.db is not a valid SQLite database"},
                 status_code=400,
             )
+        if relpath.startswith("drums/") and relpath.lower().endswith(".json"):
+            from routers.drums import validate_kit_bytes
+            stem = Path(relpath).stem
+            canonical, kit_err, kit_status = validate_kit_bytes(payload, stem)
+            if kit_err is not None or canonical is None:
+                return JSONResponse(
+                    {"ok": False, "error": f"core_server_files, file {relpath!r}: {kit_err}"},
+                    status_code=kit_status if kit_status in (400, 413) else 400,
+                )
+            payload = canonical
         staged.append((f"core/{relpath}", target, payload))
         applied_core.append(relpath)
     if db_restore_staged:
