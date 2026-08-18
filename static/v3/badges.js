@@ -255,6 +255,24 @@
         // else: tuner plugin not installed — no-op.
     }
 
+    // INIT-001/SPEC-003: host-side plugin presence. Prefer the live API
+    // (`window.tuner.toggle`) over sniffing `#tuner-plugin-ui`, which does not
+    // exist until the plugin mounts. The loader Map is the fallback when the
+    // script has evaluated but the API object is not yet assigned.
+    function tunerPluginPresent() {
+        if (window.tuner && typeof window.tuner.toggle === 'function') return true;
+        const loaded = window.feedBack && window.feedBack._loadedPluginScripts;
+        return !!(loaded && typeof loaded.has === 'function' && loaded.has('tuner'));
+    }
+
+    // Presence only. SPEC-004 adds `player_instrument === 'drums'` as a second
+    // conjunct here — keep that check out of tunerPluginPresent().
+    function shouldShowTunerBadge() {
+        if (!tunerPluginPresent()) return false;
+        // A Map-only hit is not yet a clickable control; wait for toggle.
+        return !!(window.tuner && typeof window.tuner.toggle === 'function');
+    }
+
     // ── Live tuner badge helpers ──────────────────────────────────────────--
     let _lastFrame = null;
     // 11-bar heat gradient: index 0 = very flat (dark red), 5 = center (green), 10 = very sharp (dark red).
@@ -327,6 +345,13 @@
     function renderTuner() {
         const host = document.getElementById('v3-badge-tuner');
         if (!host) return;
+        // INIT-001/SPEC-003: empty the stable shell host rather than emitting a
+        // dead button. Shell keeps `#v3-badge-tuner` so SPEC-004 can restyle
+        // without fighting this gate.
+        if (!shouldShowTunerBadge()) {
+            host.innerHTML = '';
+            return;
+        }
         const hz = Math.round(settings.reference_pitch || 440);
         const initNote = typeof settings.tuning === 'string'
             ? (TUNING_NOTE[settings.tuning] || 'E') : lowStringNote(settings.tuning);
@@ -568,7 +593,12 @@
             (active ? 'bg-fb-primary text-white' : 'bg-gray-800/50 text-fb-textDim hover:text-fb-text') + '">' + esc(label) + '</button>';
     }
 
-    window.v3Badges = { reload: async () => { await Promise.all([loadTunings(), loadSettings()]); renderInstrument(); renderTuner(); } };
+    window.v3Badges = {
+        reload: async () => { await Promise.all([loadTunings(), loadSettings()]); renderInstrument(); renderTuner(); },
+        // Late-load handshake: tuner/screen.js calls this after publishing window.tuner
+        // (no plugins:loaded event exists on the host).
+        renderTuner: renderTuner,
+    };
 
     async function boot() {
         await Promise.all([loadTunings(), loadSettings()]);

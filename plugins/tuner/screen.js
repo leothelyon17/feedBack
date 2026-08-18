@@ -764,7 +764,15 @@
         },
     };
 
-    // Boot: load scripts, add toggle button, then auto-start audio for the live badge
+    // INIT-001/SPEC-003: badges.js boots before this script; poke its presence
+    // gate so `#v3-badge-tuner` renders once `window.tuner` exists. No-op when
+    // the v3 shell is not on the page.
+    if (window.v3Badges && typeof window.v3Badges.renderTuner === 'function') {
+        window.v3Badges.renderTuner();
+    }
+
+    // Boot: load scripts and add the toggle button. Mic / AudioContext start
+    // waits for a user gesture (enable / panel open / badge click) — INIT-001/SPEC-003.
     Promise.all([
         _loadScript('/api/plugins/tuner/utils/tuning-utils.js'),
         _loadScript('/api/plugins/tuner/utils/audio.js'),
@@ -778,19 +786,6 @@
         _tunerUIApi.addButton();
         loadSettings();
         await loadConfig();
-        // Auto-start audio so the v3 badge receives live tuner:frame events from
-        // page load, without requiring the user to open the tuner panel first.
-        // Errors are silent — a permission prompt or missing device is non-fatal
-        // here; the user will see the mic error modal if they explicitly open the
-        // tuner via enable().
-        try {
-            await window._tunerAudio.start(
-                { deviceId: _state.selectedDeviceId, channel: _state.selectedChannel, audioInputMode: _state.audioInputMode },
-                _tunerUIApi.updateUI
-            );
-        } catch (e) {
-            console.warn('Tuner: auto-start audio failed (badge will be static):', e && e.message ? e.message : e);
-        }
         _installAutoOpenListeners();
     }).catch(e => console.error(e));
     _installAutoOpenListeners();
