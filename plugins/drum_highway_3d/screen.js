@@ -379,6 +379,182 @@
         57: 'crash_r',
     };
 
+    // INIT-001/SPEC-006: consume core vocabulary / active_kit notes read-only.
+    // Local ALL_PIECES + MIDI_TO_PIECE stay as the offline / old-core fallback
+    // (delete nothing). Payload is untrusted: shape-check ids and midi lists;
+    // ignore unknown keys and prototype-pollution names.
+    const _PIECE_ID_RE = /^[a-z][a-z0-9_]*$/;
+    let _vocabPieceIds = null;     // string[] once a usable vocabulary is applied
+    let _vocabMidiMap = null;      // midi→piece overlay from vocabulary GM lists
+    let _kitMidiOverlay = null;    // midi→piece overlay from active_kit.notes
+
+    function _isSafeKey(key) {
+        return typeof key === 'string'
+            && key !== '__proto__'
+            && key !== 'constructor'
+            && key !== 'prototype';
+    }
+    function _isPieceId(id) {
+        return typeof id === 'string' && _PIECE_ID_RE.test(id) && _isSafeKey(id);
+    }
+    function _parseMidiNote(value) {
+        const n = typeof value === 'number' ? value : Number(value);
+        if (!Number.isInteger(n) || n < 0 || n > 127) return null;
+        return n;
+    }
+    function _midiListFromSpec(spec) {
+        if (spec == null) return [];
+        if (typeof spec === 'number' || typeof spec === 'string') {
+            const n = _parseMidiNote(spec);
+            return n === null ? [] : [n];
+        }
+        let raw = spec;
+        if (!Array.isArray(spec) && typeof spec === 'object') {
+            raw = spec.midi;
+        }
+        if (raw == null) return [];
+        if (!Array.isArray(raw)) {
+            const n = _parseMidiNote(raw);
+            return n === null ? [] : [n];
+        }
+        const out = [];
+        const cap = Math.min(raw.length, 16);
+        for (let i = 0; i < cap; i++) {
+            const n = _parseMidiNote(raw[i]);
+            if (n !== null) out.push(n);
+        }
+        return out;
+    }
+    function _parseVocabulary(raw) {
+        // Accept { pieces: { id: { midi: [...] } } }, { pieces: { id: [midi] } },
+        // { pieces: ["kick", ...] }, or { pieces: [{ id, midi }] }. Anything
+        // else — including a non-object root — is unusable.
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const pieces = raw.pieces !== undefined ? raw.pieces : raw.piece_ids;
+        if (pieces == null) return null;
+        const ids = [];
+        const seen = Object.create(null);
+        const midiMap = Object.create(null);
+        function addPiece(id, spec) {
+            if (!_isPieceId(id) || seen[id] || ids.length >= 64) return;
+            seen[id] = 1;
+            ids.push(id);
+            const midis = _midiListFromSpec(spec);
+            for (let i = 0; i < midis.length; i++) {
+                const n = midis[i];
+                if (midiMap[n] === undefined) midiMap[n] = id;
+            }
+        }
+        if (Array.isArray(pieces)) {
+            const cap = Math.min(pieces.length, 64);
+            for (let i = 0; i < cap; i++) {
+                const item = pieces[i];
+                if (typeof item === 'string') addPiece(item, null);
+                else if (item && typeof item === 'object' && !Array.isArray(item)) {
+                    addPiece(item.id, item);
+                }
+            }
+        } else if (typeof pieces === 'object') {
+            const keys = Object.keys(pieces);
+            const cap = Math.min(keys.length, 64);
+            for (let i = 0; i < cap; i++) {
+                const id = keys[i];
+                if (!_isSafeKey(id)) continue;
+                addPiece(id, pieces[id]);
+            }
+        } else {
+            return null;
+        }
+        if (ids.length === 0) return null;
+        return { pieceIds: ids, midiToPiece: midiMap };
+    }
+    function _parseKitNotes(kit) {
+        if (!kit || typeof kit !== 'object' || Array.isArray(kit)) return null;
+        const notes = kit.notes;
+        if (!notes || typeof notes !== 'object' || Array.isArray(notes)) return null;
+        const overlay = Object.create(null);
+        const keys = Object.keys(notes);
+        const cap = Math.min(keys.length, 128);
+        let count = 0;
+        for (let i = 0; i < cap; i++) {
+            const key = keys[i];
+            if (!_isSafeKey(key)) continue;
+            const n = _parseMidiNote(key);
+            if (n === null) continue;
+            const piece = notes[key];
+            if (!_isPieceId(piece)) continue;
+            overlay[n] = piece;
+            count++;
+        }
+        return count > 0 ? overlay : null;
+    }
+    function _applyVocabulary(payload) {
+        const parsed = _parseVocabulary(payload);
+        if (!parsed) return false;
+        _vocabPieceIds = parsed.pieceIds;
+        _vocabMidiMap = parsed.midiToPiece;
+        return true;
+    }
+    function _applyActiveKitNotes(kit) {
+        if (kit == null) {
+            _kitMidiOverlay = null;
+            return false;
+        }
+        const overlay = _parseKitNotes(kit);
+        _kitMidiOverlay = overlay;
+        return overlay !== null;
+    }
+    function _resetVocabulary() {
+        _vocabPieceIds = null;
+        _vocabMidiMap = null;
+        _kitMidiOverlay = null;
+    }
+    function _effectivePieceIds() {
+        if (_vocabPieceIds && _vocabPieceIds.length) return _vocabPieceIds.slice();
+        return ALL_PIECES.slice();
+    }
+    function _midiToPiece(midiNote) {
+        const n = _parseMidiNote(midiNote);
+        if (n === null) return undefined;
+        if (_kitMidiOverlay && _kitMidiOverlay[n] !== undefined) return _kitMidiOverlay[n];
+        if (_vocabMidiMap && _vocabMidiMap[n] !== undefined) return _vocabMidiMap[n];
+        return MIDI_TO_PIECE[n];
+    }
+    async function _consumeCoreVocabulary(fetchFn) {
+        const f = fetchFn || (typeof fetch === 'function' ? fetch : null);
+        if (!f) return { vocabulary: false, activeKit: false };
+        let vocabulary = false;
+        try {
+            const r = await f('/api/drums/vocabulary');
+            const body = r && r.ok ? await r.json() : null;
+            if (_applyVocabulary(body)) vocabulary = true;
+        } catch (_) { /* offline / old core — keep MIDI_TO_PIECE */ }
+        let kitId = null;
+        try {
+            const r = await f('/api/settings');
+            const body = r && r.ok ? await r.json() : null;
+            if (body && typeof body.active_kit === 'string' && body.active_kit) {
+                kitId = body.active_kit;
+            }
+        } catch (_) { /* settings optional */ }
+        if (!kitId) {
+            _applyActiveKitNotes(null);
+            return { vocabulary, activeKit: false };
+        }
+        try {
+            const r = await f('/api/drums/kits/' + encodeURIComponent(kitId));
+            const body = r && r.ok ? await r.json() : null;
+            const activeKit = _applyActiveKitNotes(body);
+            return { vocabulary, activeKit };
+        } catch (_) {
+            _applyActiveKitNotes(null);
+            return { vocabulary, activeKit: false };
+        }
+    }
+    if (typeof fetch === 'function') {
+        _consumeCoreVocabulary();
+    }
+
     // ±50 ms hit window — same as the 2D drums plugin so users get
     // identical timing across both visualisations.
     const HIT_TOLERANCE_S = 0.05;
@@ -1823,7 +1999,7 @@
             _synthDrumHit(midiNote, velocity);
             _synthEnsureCtx();
 
-            const piece = MIDI_TO_PIECE[midiNote];
+            const piece = _midiToPiece(midiNote);
             const lane = piece !== undefined ? PIECE_TO_LANE[piece] : undefined;
             if (lane === undefined) {
                 _laneFlashes.push({ lane: -1, wall: performance.now(), kind: 'wrong' });
@@ -3657,7 +3833,18 @@
         BG_STYLE_IDS,
         FX_DEFAULTS,
         MIDI_TO_PIECE,
+        ALL_PIECES,
+        LS_KIT_CONFIG,
         HIT_TOLERANCE_S,
+        _parseVocabulary,
+        _parseKitNotes,
+        _applyVocabulary,
+        _applyActiveKitNotes,
+        _resetVocabulary,
+        _effectivePieceIds,
+        _midiToPiece,
+        _consumeCoreVocabulary,
+        _readKitConfig,
     };
 
     // Headless verification hook (keys __keysHwTest pattern): lets
