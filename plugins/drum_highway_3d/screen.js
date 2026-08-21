@@ -379,6 +379,182 @@
         57: 'crash_r',
     };
 
+    // INIT-001/SPEC-006: consume core vocabulary / active_kit notes read-only.
+    // Local ALL_PIECES + MIDI_TO_PIECE stay as the offline / old-core fallback
+    // (delete nothing). Payload is untrusted: shape-check ids and midi lists;
+    // ignore unknown keys and prototype-pollution names.
+    const _PIECE_ID_RE = /^[a-z][a-z0-9_]*$/;
+    let _vocabPieceIds = null;     // string[] once a usable vocabulary is applied
+    let _vocabMidiMap = null;      // midi→piece overlay from vocabulary GM lists
+    let _kitMidiOverlay = null;    // midi→piece overlay from active_kit.notes
+
+    function _isSafeKey(key) {
+        return typeof key === 'string'
+            && key !== '__proto__'
+            && key !== 'constructor'
+            && key !== 'prototype';
+    }
+    function _isPieceId(id) {
+        return typeof id === 'string' && _PIECE_ID_RE.test(id) && _isSafeKey(id);
+    }
+    function _parseMidiNote(value) {
+        const n = typeof value === 'number' ? value : Number(value);
+        if (!Number.isInteger(n) || n < 0 || n > 127) return null;
+        return n;
+    }
+    function _midiListFromSpec(spec) {
+        if (spec == null) return [];
+        if (typeof spec === 'number' || typeof spec === 'string') {
+            const n = _parseMidiNote(spec);
+            return n === null ? [] : [n];
+        }
+        let raw = spec;
+        if (!Array.isArray(spec) && typeof spec === 'object') {
+            raw = spec.midi;
+        }
+        if (raw == null) return [];
+        if (!Array.isArray(raw)) {
+            const n = _parseMidiNote(raw);
+            return n === null ? [] : [n];
+        }
+        const out = [];
+        const cap = Math.min(raw.length, 16);
+        for (let i = 0; i < cap; i++) {
+            const n = _parseMidiNote(raw[i]);
+            if (n !== null) out.push(n);
+        }
+        return out;
+    }
+    function _parseVocabulary(raw) {
+        // Accept { pieces: { id: { midi: [...] } } }, { pieces: { id: [midi] } },
+        // { pieces: ["kick", ...] }, or { pieces: [{ id, midi }] }. Anything
+        // else — including a non-object root — is unusable.
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+        const pieces = raw.pieces !== undefined ? raw.pieces : raw.piece_ids;
+        if (pieces == null) return null;
+        const ids = [];
+        const seen = Object.create(null);
+        const midiMap = Object.create(null);
+        function addPiece(id, spec) {
+            if (!_isPieceId(id) || seen[id] || ids.length >= 64) return;
+            seen[id] = 1;
+            ids.push(id);
+            const midis = _midiListFromSpec(spec);
+            for (let i = 0; i < midis.length; i++) {
+                const n = midis[i];
+                if (midiMap[n] === undefined) midiMap[n] = id;
+            }
+        }
+        if (Array.isArray(pieces)) {
+            const cap = Math.min(pieces.length, 64);
+            for (let i = 0; i < cap; i++) {
+                const item = pieces[i];
+                if (typeof item === 'string') addPiece(item, null);
+                else if (item && typeof item === 'object' && !Array.isArray(item)) {
+                    addPiece(item.id, item);
+                }
+            }
+        } else if (typeof pieces === 'object') {
+            const keys = Object.keys(pieces);
+            const cap = Math.min(keys.length, 64);
+            for (let i = 0; i < cap; i++) {
+                const id = keys[i];
+                if (!_isSafeKey(id)) continue;
+                addPiece(id, pieces[id]);
+            }
+        } else {
+            return null;
+        }
+        if (ids.length === 0) return null;
+        return { pieceIds: ids, midiToPiece: midiMap };
+    }
+    function _parseKitNotes(kit) {
+        if (!kit || typeof kit !== 'object' || Array.isArray(kit)) return null;
+        const notes = kit.notes;
+        if (!notes || typeof notes !== 'object' || Array.isArray(notes)) return null;
+        const overlay = Object.create(null);
+        const keys = Object.keys(notes);
+        const cap = Math.min(keys.length, 128);
+        let count = 0;
+        for (let i = 0; i < cap; i++) {
+            const key = keys[i];
+            if (!_isSafeKey(key)) continue;
+            const n = _parseMidiNote(key);
+            if (n === null) continue;
+            const piece = notes[key];
+            if (!_isPieceId(piece)) continue;
+            overlay[n] = piece;
+            count++;
+        }
+        return count > 0 ? overlay : null;
+    }
+    function _applyVocabulary(payload) {
+        const parsed = _parseVocabulary(payload);
+        if (!parsed) return false;
+        _vocabPieceIds = parsed.pieceIds;
+        _vocabMidiMap = parsed.midiToPiece;
+        return true;
+    }
+    function _applyActiveKitNotes(kit) {
+        if (kit == null) {
+            _kitMidiOverlay = null;
+            return false;
+        }
+        const overlay = _parseKitNotes(kit);
+        _kitMidiOverlay = overlay;
+        return overlay !== null;
+    }
+    function _resetVocabulary() {
+        _vocabPieceIds = null;
+        _vocabMidiMap = null;
+        _kitMidiOverlay = null;
+    }
+    function _effectivePieceIds() {
+        if (_vocabPieceIds && _vocabPieceIds.length) return _vocabPieceIds.slice();
+        return ALL_PIECES.slice();
+    }
+    function _midiToPiece(midiNote) {
+        const n = _parseMidiNote(midiNote);
+        if (n === null) return undefined;
+        if (_kitMidiOverlay && _kitMidiOverlay[n] !== undefined) return _kitMidiOverlay[n];
+        if (_vocabMidiMap && _vocabMidiMap[n] !== undefined) return _vocabMidiMap[n];
+        return MIDI_TO_PIECE[n];
+    }
+    async function _consumeCoreVocabulary(fetchFn) {
+        const f = fetchFn || (typeof fetch === 'function' ? fetch : null);
+        if (!f) return { vocabulary: false, activeKit: false };
+        let vocabulary = false;
+        try {
+            const r = await f('/api/drums/vocabulary');
+            const body = r && r.ok ? await r.json() : null;
+            if (_applyVocabulary(body)) vocabulary = true;
+        } catch (_) { /* offline / old core — keep MIDI_TO_PIECE */ }
+        let kitId = null;
+        try {
+            const r = await f('/api/settings');
+            const body = r && r.ok ? await r.json() : null;
+            if (body && typeof body.active_kit === 'string' && body.active_kit) {
+                kitId = body.active_kit;
+            }
+        } catch (_) { /* settings optional */ }
+        if (!kitId) {
+            _applyActiveKitNotes(null);
+            return { vocabulary, activeKit: false };
+        }
+        try {
+            const r = await f('/api/drums/kits/' + encodeURIComponent(kitId));
+            const body = r && r.ok ? await r.json() : null;
+            const activeKit = _applyActiveKitNotes(body);
+            return { vocabulary, activeKit };
+        } catch (_) {
+            _applyActiveKitNotes(null);
+            return { vocabulary, activeKit: false };
+        }
+    }
+    if (typeof fetch === 'function') {
+        _consumeCoreVocabulary();
+    }
+
     // ±50 ms hit window — same as the 2D drums plugin so users get
     // identical timing across both visualisations.
     const HIT_TOLERANCE_S = 0.05;
@@ -394,8 +570,8 @@
     const _MIDI_BLOCKLIST_RE = /midi through|^thru\b|^iac\b/i;
 
     // MIDI is sourced from the core `midi-input` capability domain
-    // (window.slopsmith.midiInput) rather than a private requestMIDIAccess() —
-    // one device-access boundary shared with piano/drums/keys/onboarding.
+    // (window.slopsmith.midiInput) rather than a private Web MIDI permission
+    // call — one device-access boundary shared with piano/drums/keys/onboarding.
     const _MIDI_REQUESTER = 'drum_highway_3d';
     let _midiReady = false;      // discover() has run
     let _midiHandle = null;      // live domain session handle (addListener/removeListener)
@@ -453,6 +629,7 @@
     let _midiInitInFlight = null;
     let _midiConnectSeq = 0;     // generation guard for async _midiConnect races
     async function _midiInit() {
+        _hydrateSharedInputSettings();
         if (_midiReady) {
             // Only (re)connect when there's no live session. A repeated init
             // (settings panel open, extra splitscreen instance) must NOT re-enter
@@ -467,7 +644,7 @@
         if (!mi) return;
         _midiInitInFlight = (async () => {
             try {
-                const r = await mi.discover();   // permission boundary (requestMIDIAccess, in core)
+                const r = await mi.discover();   // permission boundary lives in core midi-input
                 // Only latch ready on a successful discovery — a denied/unavailable
                 // outcome must NOT latch, or reopening never retries the prompt.
                 if (!r || r.outcome !== 'handled') return;
@@ -495,28 +672,50 @@
     }
 
     function _readSavedPick() {
-        // New v2 storage: {id, name} JSON. Falls back to legacy v1 id-only.
-        // Coerce id/name to strings so _midiAutoConnect can safely call
-        // .toLowerCase() even if the stored JSON was manually edited.
+        // Identity lives on {id, name, key}. SPEC-002 dual-writes a settings
+        // snapshot onto the same key (no identity fields) — fall through to
+        // drum_h3d_midi_input in that case so a settings update cannot look
+        // like an explicit None opt-out (INIT-002/SPEC-004b).
         try {
             const v2 = _readStore(LS_MIDI_PICK);
             if (v2) {
                 const obj = JSON.parse(v2);
                 if (obj && typeof obj === 'object') {
-                    return { id: String(obj.id || ''), name: String(obj.name || ''), key: String(obj.key || '') };
+                    const id = String(obj.id || '');
+                    const name = String(obj.name || '');
+                    const key = String(obj.key || '');
+                    if (id || name || key) return { id, name, key };
                 }
             }
         } catch (_) {}
         const v1 = _readStore(LS_MIDI_INPUT);
-        if (typeof v1 === 'string') return { id: v1, name: '' };
+        if (typeof v1 === 'string') return { id: v1, name: '', key: '' };
         return null;
     }
 
     function _writeSavedPick(id, name, key) {
+        _savedPickMem = { id: id || '', name: name || '', key: key || '' };
+        _persistPickRecord();
+    }
+
+    function _persistPickRecord() {
+        // Merge identity with the shared settings snapshot so SPEC-002's
+        // dual-write shape and 3D's {id,name,key} identity coexist on
+        // drum_h3d_midi_pick_v2 during the compatibility window.
+        if (!_savedPickMem) {
+            const existing = _readSavedPick();
+            if (existing) _savedPickMem = { id: existing.id || '', name: existing.name || '', key: existing.key || '' };
+        }
+        const ident = _savedPickMem || { id: '', name: '', key: '' };
         try {
-            localStorage.setItem(LS_MIDI_PICK, JSON.stringify({ id: id || '', name: name || '', key: key || '' }));
-            // Keep the legacy key in sync so a downgrade is non-destructive.
-            localStorage.setItem(LS_MIDI_INPUT, id || '');
+            localStorage.setItem(LS_MIDI_PICK, JSON.stringify({
+                id: ident.id, name: ident.name, key: ident.key,
+                deviceEnabled: _inputSettings.deviceEnabled,
+                midiChannel: _inputSettings.midiChannel,
+                hitDetection: _inputSettings.hitDetection,
+                synthVolume: _inputSettings.synthVolume,
+            }));
+            localStorage.setItem(LS_MIDI_INPUT, ident.id || '');
         } catch (_) {}
     }
 
@@ -525,6 +724,9 @@
         // fallback input, because _midiConnect persists the pick and that would
         // overwrite the user's saved device on a transient multi-device unplug
         // (the original returns on replug and reconnects then).
+        // SPEC-004b: deviceEnabled false (explicit None, or a 2D disable)
+        // must not auto-flip a source back on.
+        if (!_inputSettings.deviceEnabled) return;
         if (allowFallback === undefined) allowFallback = true;
         const inputs = _midiSources();
         if (!inputs.length) return;
@@ -596,6 +798,17 @@
                         if (!_midiInput || _midiInput.key !== lkey) { try { mi.close({ requester: _MIDI_REQUESTER, logicalSourceKey: lkey }); } catch (_) { /* best-effort */ } }
                         return;
                     }
+                    // SPEC-004b: a destroy or deviceEnabled:false while we
+                    // awaited open must not install a live handle.
+                    if (!_inputSettings.deviceEnabled || _instances.size === 0) {
+                        try { mi.close({ requester: _MIDI_REQUESTER, logicalSourceKey: lkey }); } catch (_) { /* best-effort */ }
+                        if (myGen === _midiConnectSeq) {
+                            _midiHandle = null;
+                            _midiListener = null;
+                            _midiInput = null;
+                        }
+                        return;
+                    }
                     if (res && res.handle) {
                         _midiHandle = res.handle;
                         // The domain handle delivers raw MIDI data; adapt to the
@@ -644,15 +857,25 @@
     }
 
     function _midiOnMessage(e) {
-        if (!_activeInstance) return;
         const data = e.data;
         if (!data || data.length < 3) return;
         const type = data[0] & 0xf0;
+        const ch = data[0] & 0x0f;
         const note = data[1];
         const vel = data[2];
         // 0x90 = note-on. note-on with velocity 0 is a note-off (running
         // status); skip those too.
         if (type !== 0x90 || vel === 0) return;
+        // SPEC-004b: match 2D — filter by midiChannel before Learn or scoring.
+        // -1 = all channels.
+        const wantCh = _inputSettings.midiChannel;
+        if (wantCh >= 0 && ch !== wantCh) return;
+        // Learn intercept (INIT-002/SPEC-004): a pending Learn from 3D
+        // settings consumes the next note-on via PUT and does not score.
+        if (_learnPiece && _confirmedKitId) {
+            return _completeLearn(note);
+        }
+        if (!_activeInstance) return;
         _activeInstance._handleDrumHit(note, vel);
     }
 
@@ -744,12 +967,590 @@
         } catch (_) { return false; }
     };
 
+    /* ── Core kit mapping editor (INIT-002/SPEC-004) ─────────────
+     *
+     * MIDI-note-to-piece mappings live exclusively on the core active kit
+     * (SPEC-001 atomic PUT/DELETE). This block never writes drum_h3d_kit_v1
+     * (GR-002) and never POSTs active_kit except from the explicit
+     * "Use this kit" confirm (GR-003).
+     *
+     * Shared device/channel/hits/volume consumption is SPEC-004b: the
+     * same subscribe owner (`_onDrumInputChange`) handles settings
+     * records (`changedKeys`) and mapping records (empty changedKeys
+     * plus mutation/kitId). Do not add a second subscribe().
+     */
+    const PIECE_FRIENDLY = {
+        kick: 'Kick',
+        snare: 'Snare', snare_xstick: 'Snare (cross-stick)',
+        hh_closed: 'Hi-hat (closed)', hh_open: 'Hi-hat (open)', hh_pedal: 'Hi-hat (pedal)',
+        tom_hi: 'Tom — high', tom_mid: 'Tom — mid', tom_low: 'Tom — low', tom_floor: 'Floor tom',
+        crash_l: 'Crash (left)', crash_r: 'Crash (right)', splash: 'Splash', china: 'China',
+        ride: 'Ride', ride_bell: 'Ride bell',
+        stack: 'Stack', bell: 'Bell',
+    };
+    function _pieceFriendly(id) {
+        return PIECE_FRIENDLY[id] || String(id || '');
+    }
+
+    let _coreKitList = [];
+    let _selectedKitId = null;
+    let _confirmedKitId = null;
+    let _confirmedKit = null;
+    let _kitOpGen = 0;
+    let _mappingUnsub = null;
+    let _mappingListenerCount = 0;
+    let _learnPiece = null;
+    let _learnInFlight = false;
+    let _undoRecord = null; // { midiNote, pieceId } last successful custom remove
+    let _mappingStatus = { message: '', kind: '' };
+    let _lastMappingRevision = null;
+    let _mappingFetchImpl = null;
+    let _notifiedMapping = []; // test probe; capped
+
+    // INIT-002/SPEC-004b: shared device/channel/hits/volume. Same
+    // subscribe owner as mapping (`_onDrumInputChange`); do not add a
+    // second drumInput.subscribe().
+    const INPUT_FIELDS = ['deviceEnabled', 'midiChannel', 'hitDetection', 'synthVolume'];
+    let _inputSettings = {
+        deviceEnabled: false,
+        midiChannel: -1,
+        hitDetection: false,
+        synthVolume: 0.7,
+    };
+    let _lastSettingsRevision = null;
+    let _lastLocalSettingsRevision = null;
+    let _applyingLocalSettings = false;
+    let _savedPickMem = null;
+    let _seededLocalVolume = false;
+
+    function _beginKitOp() { return ++_kitOpGen; }
+    function _isCurrentKitOp(gen) { return gen === _kitOpGen; }
+
+    function _doFetch(url, opts) {
+        const f = _mappingFetchImpl || (typeof fetch === 'function' ? fetch : null);
+        if (!f) return Promise.reject(new Error('no fetch'));
+        return f(url, opts);
+    }
+
+    function _drumInput() {
+        const d = window.feedBack && window.feedBack.drumInput;
+        return (d && d.version === 1) ? d : null;
+    }
+
+    function _notifyInputUi() {
+        try { window.dispatchEvent(new CustomEvent('drum_h3d:input')); } catch (_) {}
+    }
+
+    function _clampInputChannel(value) {
+        if (value == null || value === '') return -1;
+        const n = Math.round(Number(value));
+        if (!Number.isFinite(n)) return -1;
+        if (n < -1) return -1;
+        if (n > 15) return 15;
+        return n;
+    }
+
+    function _clampInputVolume(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return 0.7;
+        if (n < 0) return 0;
+        if (n > 1) return 1;
+        return n;
+    }
+
+    function _revisionsEqual(a, b) {
+        if (!a || !b) return false;
+        return a.clock === b.clock && a.origin === b.origin && a.sequence === b.sequence;
+    }
+
+    function _legacyVolumeFromStore() {
+        const raw = _readStore(LS_SYNTH_VOL);
+        const parsed = raw === null ? NaN : parseFloat(raw);
+        if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) return parsed;
+        return null;
+    }
+
+    function _applySettingsState(state, changedKeys) {
+        if (!state || typeof state !== 'object') return;
+        const keys = (changedKeys && changedKeys.length) ? changedKeys : INPUT_FIELDS;
+        let deviceTouched = false;
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            if (key === 'midiChannel' && state.midiChannel !== undefined) {
+                _inputSettings.midiChannel = _clampInputChannel(state.midiChannel);
+            } else if (key === 'hitDetection' && (state.hitDetection === true || state.hitDetection === false)) {
+                const next = state.hitDetection;
+                if (next && !_inputSettings.hitDetection) _midiJustConnected = true;
+                _inputSettings.hitDetection = next;
+            } else if (key === 'synthVolume' && state.synthVolume != null) {
+                _synthSetVolume(state.synthVolume, { fromContract: true });
+                _inputSettings.synthVolume = _synthVolume;
+            } else if (key === 'deviceEnabled' && (state.deviceEnabled === true || state.deviceEnabled === false)) {
+                if (_inputSettings.deviceEnabled !== state.deviceEnabled) deviceTouched = true;
+                _inputSettings.deviceEnabled = state.deviceEnabled;
+            }
+        }
+        if (deviceTouched) {
+            if (_inputSettings.deviceEnabled) _midiAutoConnect();
+            else _midiDetach();
+        }
+        _notifyInputUi();
+    }
+
+    function _writeSharedSettings(partial) {
+        if (!partial || typeof partial !== 'object') return;
+        _applySettingsState(partial, Object.keys(partial));
+        const di = _drumInput();
+        if (!di || typeof di.update !== 'function') {
+            _persistPickRecord();
+            if (partial.synthVolume != null) _writeStore(LS_SYNTH_VOL, String(_inputSettings.synthVolume));
+            return;
+        }
+        _applyingLocalSettings = true;
+        try {
+            const next = di.update(partial);
+            if (next && next.revision) {
+                _lastLocalSettingsRevision = next.revision;
+                _lastSettingsRevision = next.revision;
+            }
+        } finally {
+            _applyingLocalSettings = false;
+        }
+        // SPEC-002 dual-writes a settings-only snapshot onto pick_v2;
+        // restore identity so a later reload does not look like None.
+        _persistPickRecord();
+    }
+
+    function _hydrateSharedInputSettings() {
+        // Read 3D-only volume before applying the contract — apply()
+        // mirrors synthVolume onto drum_h3d_synth_vol and would otherwise
+        // erase the legacy value we need to seed (INIT-002/SPEC-004b).
+        const localVol = _legacyVolumeFromStore();
+        const di = _drumInput();
+        const state = di && typeof di.get === 'function' ? di.get() : null;
+        if (state) {
+            _applySettingsState(state, INPUT_FIELDS);
+            if (state.revision) _lastSettingsRevision = state.revision;
+            if (!_seededLocalVolume && localVol != null && localVol !== state.synthVolume && state.synthVolume === 0.7) {
+                _seededLocalVolume = true;
+                _writeSharedSettings({ synthVolume: localVol });
+            } else {
+                _seededLocalVolume = true;
+            }
+        } else {
+            if (localVol != null) {
+                _inputSettings.synthVolume = localVol;
+                _synthSetVolume(localVol, { fromContract: true });
+            }
+            const saved = _readSavedPick();
+            if (saved && (saved.id || saved.name || saved.key)) _inputSettings.deviceEnabled = true;
+        }
+        if (!_savedPickMem) {
+            const saved = _readSavedPick();
+            if (saved) _savedPickMem = { id: saved.id || '', name: saved.name || '', key: saved.key || '' };
+        }
+    }
+
+    function _onSharedSettingsChange(detail, changed) {
+        if (_applyingLocalSettings) return;
+        if (_revisionsEqual(detail.revision, _lastLocalSettingsRevision)) return;
+        if (!_mappingRevNewer(detail.revision, _lastSettingsRevision)) return;
+        if (detail.revision) _lastSettingsRevision = detail.revision;
+        const di = _drumInput();
+        const state = di && typeof di.get === 'function' ? di.get() : null;
+        _applySettingsState(state || {}, changed);
+        // Incoming contract records refresh the renderer only — never update()
+        // (REQ-005 / REQ-002: no echoed notification).
+    }
+
+    function _setMappingStatus(message, kind) {
+        _mappingStatus = { message: message || '', kind: kind || '' };
+        _notifyMappingUi();
+    }
+
+    function _notifyMappingUi() {
+        try { window.dispatchEvent(new CustomEvent('drum_h3d:mapping')); } catch (_) {}
+    }
+
+    function _gmPieceForNote(midiNote) {
+        const n = _parseMidiNote(midiNote);
+        if (n === null) return undefined;
+        if (_vocabMidiMap && _vocabMidiMap[n] !== undefined) return _vocabMidiMap[n];
+        return MIDI_TO_PIECE[n];
+    }
+
+    function _notesObject(kit) {
+        if (!kit || typeof kit !== 'object' || !kit.notes || typeof kit.notes !== 'object') return {};
+        return kit.notes;
+    }
+
+    function _customPieceForNote(midiNote) {
+        const n = _parseMidiNote(midiNote);
+        if (n === null) return undefined;
+        const notes = _notesObject(_confirmedKit);
+        const piece = notes[n] !== undefined ? notes[n] : notes[String(n)];
+        return _isPieceId(piece) ? piece : undefined;
+    }
+
+    function _mappingRevNewer(candidate, current) {
+        if (!candidate || typeof candidate !== 'object') return true;
+        if (!current) return true;
+        const cClock = Number(candidate.clock);
+        const pClock = Number(current.clock);
+        if (Number.isFinite(cClock) && Number.isFinite(pClock) && cClock !== pClock) return cClock > pClock;
+        const cOrigin = typeof candidate.origin === 'string' ? candidate.origin : '';
+        const pOrigin = typeof current.origin === 'string' ? current.origin : '';
+        if (cOrigin !== pOrigin) return cOrigin > pOrigin;
+        return Number(candidate.sequence) > Number(current.sequence);
+    }
+
+    function _emitMappingNotify(kitId, mutation, midiNote) {
+        const payload = { kitId: kitId || null, mutation: mutation || null, midiNote: midiNote };
+        _notifiedMapping.push(payload);
+        if (_notifiedMapping.length > 20) _notifiedMapping.shift();
+        const di = _drumInput();
+        if (di && typeof di.notifyMappingChange === 'function') {
+            try { return di.notifyMappingChange(payload); } catch (_) { return payload; }
+        }
+        return payload;
+    }
+
+    function _applyConfirmedKit(kit, kitId) {
+        _confirmedKit = kit && typeof kit === 'object' ? kit : null;
+        if (kitId) _confirmedKitId = kitId;
+        _applyActiveKitNotes(_confirmedKit);
+        _notifyMappingUi();
+    }
+
+    function _canMutateMapping() {
+        return !!_confirmedKitId;
+    }
+
+    async function _refetchConfirmedKit(reason) {
+        const id = _confirmedKitId;
+        if (!id) return { ok: false, error: 'no confirmed kit' };
+        const gen = _beginKitOp();
+        try {
+            const r = await _doFetch('/api/drums/kits/' + encodeURIComponent(id));
+            if (!_isCurrentKitOp(gen) || _confirmedKitId !== id) return { ok: false, stale: true };
+            if (!r || !r.ok) {
+                _setMappingStatus('Could not refresh kit mapping', 'err');
+                return { ok: false, error: 'refetch failed' };
+            }
+            const body = await r.json();
+            if (!_isCurrentKitOp(gen) || _confirmedKitId !== id) return { ok: false, stale: true };
+            _applyConfirmedKit(body, id);
+            return { ok: true, kit: body, reason: reason || 'refetch' };
+        } catch (_) {
+            if (_isCurrentKitOp(gen)) _setMappingStatus('Could not refresh kit mapping', 'err');
+            return { ok: false, error: 'network' };
+        }
+    }
+
+    function _onDrumInputChange(detail) {
+        if (!detail || detail.version !== 1) return;
+        const changed = Array.isArray(detail.changedKeys) ? detail.changedKeys : [];
+        // Settings records carry changedKeys; mapping records do not
+        // (INIT-002/SPEC-004). One owner handles both.
+        if (changed.length > 0) {
+            _onSharedSettingsChange(detail, changed);
+            return;
+        }
+        const isMapping = detail.mutation === 'set' || detail.mutation === 'delete'
+            || (detail.kitId && changed.length === 0);
+        if (!isMapping) return;
+        if (!_mappingRevNewer(detail.revision, _lastMappingRevision)) return;
+        if (detail.revision) _lastMappingRevision = detail.revision;
+        // Refetch only — never emit in response to a refetch (REQ-002).
+        if (_confirmedKitId) _refetchConfirmedKit('event');
+    }
+
+    function _ensureMappingListeners() {
+        if (_mappingUnsub) {
+            _hydrateSharedInputSettings();
+            return;
+        }
+        const di = _drumInput();
+        if (di && typeof di.subscribe === 'function') {
+            _mappingUnsub = di.subscribe(_onDrumInputChange);
+        } else {
+            _mappingUnsub = function noopUnsub() {};
+        }
+        _mappingListenerCount += 1;
+        _hydrateSharedInputSettings();
+    }
+
+    function _releaseMappingListeners() {
+        _beginKitOp();
+        _learnPiece = null;
+        _learnInFlight = false;
+        if (_mappingUnsub) {
+            try { _mappingUnsub(); } catch (_) {}
+            _mappingUnsub = null;
+        }
+        if (_mappingListenerCount > 0) _mappingListenerCount -= 1;
+    }
+
+    async function _hydrateActiveKit() {
+        _ensureMappingListeners();
+        const gen = _beginKitOp();
+        try {
+            const listR = await _doFetch('/api/drums/kits');
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            if (listR && listR.ok) {
+                const listBody = await listR.json();
+                if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+                _coreKitList = (listBody && Array.isArray(listBody.kits)) ? listBody.kits : [];
+            }
+            const sR = await _doFetch('/api/settings');
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            const settings = sR && sR.ok ? await sR.json() : null;
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            const active = settings && typeof settings.active_kit === 'string' ? settings.active_kit : '';
+            if (!active) {
+                _notifyMappingUi();
+                return { ok: true, confirmed: false };
+            }
+            if (!_selectedKitId) _selectedKitId = active;
+            const kR = await _doFetch('/api/drums/kits/' + encodeURIComponent(active));
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            if (!kR || !kR.ok) {
+                _notifyMappingUi();
+                return { ok: true, confirmed: false };
+            }
+            const kit = await kR.json();
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            _applyConfirmedKit(kit, active);
+            return { ok: true, confirmed: true };
+        } catch (_) {
+            if (_isCurrentKitOp(gen)) _notifyMappingUi();
+            return { ok: false, error: 'network' };
+        }
+    }
+
+    function _buildMappingRows() {
+        const ids = _effectivePieceIds();
+        const notes = _notesObject(_confirmedKit);
+        const customByPiece = Object.create(null);
+        const keys = Object.keys(notes);
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            if (!_isSafeKey(key)) continue;
+            const n = _parseMidiNote(key);
+            if (n === null) continue;
+            const piece = notes[key];
+            if (!_isPieceId(piece)) continue;
+            if (!customByPiece[piece]) customByPiece[piece] = [];
+            customByPiece[piece].push(n);
+        }
+        const gmByPiece = Object.create(null);
+        for (let i = 0; i < ids.length; i++) {
+            const pid = ids[i];
+            gmByPiece[pid] = [];
+        }
+        const gmSource = _vocabMidiMap || MIDI_TO_PIECE;
+        const gmNotes = Object.keys(gmSource);
+        for (let i = 0; i < gmNotes.length; i++) {
+            const n = _parseMidiNote(gmNotes[i]);
+            if (n === null) continue;
+            if (notes[n] !== undefined || notes[String(n)] !== undefined) continue;
+            const pid = gmSource[n] !== undefined ? gmSource[n] : gmSource[String(n)];
+            if (!_isPieceId(pid)) continue;
+            if (!gmByPiece[pid]) gmByPiece[pid] = [];
+            gmByPiece[pid].push(n);
+        }
+        return ids.map((pieceId) => {
+            const customNotes = (customByPiece[pieceId] || []).slice().sort((a, b) => a - b);
+            const gmNotesFor = (gmByPiece[pieceId] || []).slice().sort((a, b) => a - b);
+            return {
+                pieceId,
+                label: _pieceFriendly(pieceId),
+                customNotes,
+                gmNotes: gmNotesFor,
+                unmapped: customNotes.length === 0 && gmNotesFor.length === 0,
+            };
+        });
+    }
+
+    async function _mutateNote(operation, midiNote, pieceId) {
+        if (!_confirmedKitId) {
+            _setMappingStatus('Confirm a kit with Use this kit before editing mappings', 'err');
+            return { ok: false, error: 'not confirmed' };
+        }
+        const n = _parseMidiNote(midiNote);
+        if (n === null) return { ok: false, error: 'invalid note' };
+        if (operation === 'set' && !_isPieceId(pieceId)) return { ok: false, error: 'invalid piece' };
+        const kitId = _confirmedKitId;
+        const gen = _beginKitOp();
+        const url = '/api/drums/kits/' + encodeURIComponent(kitId) + '/notes/' + n;
+        try {
+            const opts = operation === 'set'
+                ? { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ piece_id: pieceId }) }
+                : { method: 'DELETE' };
+            const r = await _doFetch(url, opts);
+            if (!_isCurrentKitOp(gen) || _confirmedKitId !== kitId) return { ok: false, stale: true };
+            if (!r || !r.ok) {
+                _setMappingStatus('Could not update mapping', 'err');
+                return { ok: false, error: 'request failed' };
+            }
+            const body = await r.json();
+            if (!_isCurrentKitOp(gen) || _confirmedKitId !== kitId) return { ok: false, stale: true };
+            if (body && body.kit) _applyConfirmedKit(body.kit, kitId);
+            _emitMappingNotify(kitId, operation, n);
+            if (operation === 'delete') {
+                _undoRecord = { midiNote: n, pieceId: pieceId };
+                const src = body && body.resolution && body.resolution.source;
+                const fallbackPiece = body && body.resolution && body.resolution.piece_id;
+                const msg = src === 'gm'
+                    ? ('Removed MIDI ' + n + ' — now GM default (' + _pieceFriendly(fallbackPiece) + ')')
+                    : ('Removed MIDI ' + n + ' — unmapped');
+                _setMappingStatus(msg, 'ok');
+            } else {
+                _setMappingStatus('Mapped MIDI ' + n + ' to ' + _pieceFriendly(pieceId), 'ok');
+            }
+            return { ok: true, body };
+        } catch (_) {
+            if (_isCurrentKitOp(gen)) _setMappingStatus('Could not update mapping', 'err');
+            return { ok: false, error: 'network' };
+        }
+    }
+
+    async function _completeLearn(midiNote) {
+        const piece = _learnPiece;
+        if (!piece || _learnInFlight) return { ok: false };
+        _learnInFlight = true;
+        try {
+            const result = await _mutateNote('set', midiNote, piece);
+            if (result && result.ok) _learnPiece = null;
+            return result;
+        } finally {
+            _learnInFlight = false;
+            _notifyMappingUi();
+        }
+    }
+
+    window.drumH3dEnsureMappingInit = function () {
+        return _hydrateActiveKit();
+    };
+    window.drumH3dListCoreKits = function () {
+        return _coreKitList.slice();
+    };
+    window.drumH3dGetCoreKitStatus = function () {
+        const confirmed = _coreKitList.find((k) => k && k.id === _confirmedKitId) || _confirmedKit;
+        return {
+            selectedId: _selectedKitId,
+            confirmedId: _confirmedKitId,
+            confirmedName: confirmed && confirmed.name ? String(confirmed.name) : (_confirmedKitId || ''),
+            canMutate: _canMutateMapping(),
+            learnPiece: _learnPiece,
+            undoAvailable: !!(_undoRecord && _canMutateMapping()),
+            status: { message: _mappingStatus.message, kind: _mappingStatus.kind },
+        };
+    };
+    window.drumH3dSelectCoreKit = function (id) {
+        const next = (id == null) ? '' : String(id);
+        _selectedKitId = next || null;
+        _notifyMappingUi();
+        return true;
+    };
+    window.drumH3dConfirmCoreKit = async function () {
+        if (!_selectedKitId) {
+            _setMappingStatus('Select a kit first', 'err');
+            return { ok: false, error: 'no selection' };
+        }
+        const id = _selectedKitId;
+        const gen = _beginKitOp();
+        try {
+            const r = await _doFetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ active_kit: id }),
+            });
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            if (!r || !r.ok) {
+                _setMappingStatus('Could not confirm kit', 'err');
+                return { ok: false, error: 'confirm failed' };
+            }
+            const kR = await _doFetch('/api/drums/kits/' + encodeURIComponent(id));
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            if (!kR || !kR.ok) {
+                _setMappingStatus('Could not load confirmed kit', 'err');
+                return { ok: false, error: 'fetch failed' };
+            }
+            const kit = await kR.json();
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            _undoRecord = null;
+            _learnPiece = null;
+            _applyConfirmedKit(kit, id);
+            _setMappingStatus('Using ' + (kit && kit.name ? String(kit.name) : id), 'ok');
+            return { ok: true, kit };
+        } catch (_) {
+            if (_isCurrentKitOp(gen)) _setMappingStatus('Could not confirm kit', 'err');
+            return { ok: false, error: 'network' };
+        }
+    };
+    window.drumH3dGetMappingRows = function () {
+        return _buildMappingRows();
+    };
+    window.drumH3dCanMutateMapping = function () {
+        return _canMutateMapping();
+    };
+    window.drumH3dLearnPiece = function (pieceId) {
+        if (!_canMutateMapping()) {
+            _setMappingStatus('Confirm a kit with Use this kit before editing mappings', 'err');
+            return false;
+        }
+        if (!_isPieceId(pieceId)) return false;
+        _learnPiece = (_learnPiece === pieceId) ? null : pieceId;
+        _notifyMappingUi();
+        return true;
+    };
+    window.drumH3dCancelLearn = function () {
+        _learnPiece = null;
+        _notifyMappingUi();
+    };
+    window.drumH3dSetNoteMapping = function (midiNote, pieceId) {
+        if (!_canMutateMapping()) {
+            _setMappingStatus('Confirm a kit with Use this kit before editing mappings', 'err');
+            return Promise.resolve({ ok: false, error: 'not confirmed' });
+        }
+        return _mutateNote('set', midiNote, pieceId);
+    };
+    window.drumH3dRemoveNoteMapping = function (midiNote) {
+        if (!_canMutateMapping()) {
+            _setMappingStatus('Confirm a kit with Use this kit before editing mappings', 'err');
+            return Promise.resolve({ ok: false, error: 'not confirmed' });
+        }
+        const previous = _customPieceForNote(midiNote);
+        if (!previous) {
+            _setMappingStatus('That note is a GM default and cannot be removed', 'err');
+            return Promise.resolve({ ok: false, error: 'not custom' });
+        }
+        return _mutateNote('delete', midiNote, previous);
+    };
+    window.drumH3dUndoLastRemove = function () {
+        if (!_canMutateMapping() || !_undoRecord) {
+            return Promise.resolve({ ok: false, error: 'nothing to undo' });
+        }
+        const rec = _undoRecord;
+        _undoRecord = null;
+        return _mutateNote('set', rec.midiNote, rec.pieceId).then((result) => {
+            if (result && result.ok) _setMappingStatus('Restored MIDI ' + rec.midiNote + ' to ' + _pieceFriendly(rec.pieceId), 'ok');
+            else _undoRecord = rec;
+            return result;
+        });
+    };
+    window.drumH3dPieceFriendly = function (id) {
+        return _pieceFriendly(id);
+    };
+
     /* ── MIDI device control API (consumed by settings.html) ───── */
     window.drumH3dEnsureMidiInit = function () {
         // Settings panel calls this on mount so the user can see + pick
         // MIDI devices without having to load a song first. Fires the
         // browser permission prompt the first time; idempotent after.
         // Returns a promise that resolves when _midiInit settles.
+        _ensureMappingListeners();
         return _midiInit();
     };
     window.drumH3dListMidiInputs = function () {
@@ -766,25 +1567,43 @@
         // id via _midiConnect so a future page reload still finds the
         // device after Chrome regenerates ids.
         // `id` may be a logicalSourceKey (new host calls) or a legacy sourceId.
+        // SPEC-004b: None writes deviceEnabled:false through the core
+        // contract; selecting a source enables it. Set the flag before
+        // connect so apply() does not auto-connect a fallback.
         const src = id
             ? (_midiSources().find(s => s.key === id) || _midiSources().find(s => s.id === id))
             : null;
-        _midiConnect(src ? src.id : (id || ''), src ? src.name : '', src ? src.key : '');
-        return true;
+        const enabled = !!(src || (typeof id === 'string' && id !== ''));
+        _inputSettings.deviceEnabled = enabled;
+        const connecting = _midiConnect(src ? src.id : (id || ''), src ? src.name : '', src ? src.key : '');
+        _writeSharedSettings({ deviceEnabled: enabled });
+        return connecting;
     };
     window.drumH3dGetSynthVolume = function () {
-        // When the synth has not initialised yet (viz never ran, settings
-        // opened first), read from localStorage so the settings slider shows
-        // the persisted value rather than the default 0.70.
-        if (!_synthPlayer) {
-            const raw = _readStore(LS_SYNTH_VOL);
-            const parsed = raw === null ? NaN : parseFloat(raw);
-            if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) return parsed;
-        }
-        return _synthVolume;
+        return _inputSettings.synthVolume;
     };
     window.drumH3dSetSynthVolume = function (v) {
-        _synthSetVolume(v);
+        _writeSharedSettings({ synthVolume: _clampInputVolume(v) });
+    };
+    window.drumH3dGetMidiChannel = function () {
+        return _inputSettings.midiChannel;
+    };
+    window.drumH3dSetMidiChannel = function (ch) {
+        _writeSharedSettings({ midiChannel: _clampInputChannel(ch) });
+    };
+    window.drumH3dGetHitDetection = function () {
+        return _inputSettings.hitDetection;
+    };
+    window.drumH3dSetHitDetection = function (on) {
+        _writeSharedSettings({ hitDetection: !!on });
+    };
+    window.drumH3dGetInputSettings = function () {
+        return {
+            deviceEnabled: _inputSettings.deviceEnabled,
+            midiChannel: _inputSettings.midiChannel,
+            hitDetection: _inputSettings.hitDetection,
+            synthVolume: _inputSettings.synthVolume,
+        };
     };
 
     /* ======================================================================
@@ -859,6 +1678,7 @@
             const raw = _readStore(LS_SYNTH_VOL);
             const parsed = raw === null ? NaN : parseFloat(raw);
             if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) _synthVolume = parsed;
+            if (typeof _inputSettings.synthVolume === 'number') _synthVolume = _inputSettings.synthVolume;
             if (!_playerScriptLoaded) {
                 await _loadScript(WAF_PLAYER_URL);
                 _playerScriptLoaded = true;
@@ -928,11 +1748,14 @@
         _synthPlayer.queueWaveTable(_audioCtx, _synthGain, preset, 0, midiNote, 0.5, vol);
     }
 
-    function _synthSetVolume(v) {
+    function _synthSetVolume(v, opts) {
         const c = Math.max(0, Math.min(1, Number(v) || 0));
         _synthVolume = c;
+        _inputSettings.synthVolume = c;
         if (_synthGain) _synthGain.gain.value = c;
         _writeStore(LS_SYNTH_VOL, String(c));
+        if (opts && opts.fromContract) return;
+        _writeSharedSettings({ synthVolume: c });
     }
 
     /* ======================================================================
@@ -1823,7 +2646,7 @@
             _synthDrumHit(midiNote, velocity);
             _synthEnsureCtx();
 
-            const piece = MIDI_TO_PIECE[midiNote];
+            const piece = _midiToPiece(midiNote);
             const lane = piece !== undefined ? PIECE_TO_LANE[piece] : undefined;
             if (lane === undefined) {
                 _laneFlashes.push({ lane: -1, wall: performance.now(), kind: 'wrong' });
@@ -1834,6 +2657,14 @@
                 // Free-play (no chart loaded): no scoring, but still give
                 // the pad strike its lane flash + sparks so drumming along
                 // to the demo pattern feels alive.
+                _laneFlashes.push({ lane, wall: performance.now(), kind: 'hit' });
+                _spawnHitFx(lane, null, false);
+                return;
+            }
+
+            // SPEC-004b: hitDetection gates scoring only — synth + flashes
+            // keep running so toggling Hits does not disconnect the device.
+            if (!_inputSettings.hitDetection) {
                 _laneFlashes.push({ lane, wall: performance.now(), kind: 'hit' });
                 _spawnHitFx(lane, null, false);
                 return;
@@ -3008,7 +3839,7 @@
                 // mi.open() may still be pending (slow / permission prompt), during
                 // which no events can arrive — counting passes then would bank false
                 // misses. _midiHandle is truthy only after a handle is opened+wired.
-                if (_midiHandle) {
+                if (_midiHandle && _inputSettings.hitDetection) {
                     if (_midiJustConnected) {
                         _midiJustConnected = false;
                         _resetScoring();
@@ -3443,9 +4274,13 @@
                     if (_instances.size > 1 || _ssActive()) {
                         applySize(highwayCanvas.clientWidth, highwayCanvas.clientHeight);
                     }
+                    // Hydrate shared settings (and subscribe) before MIDI
+                    // init so auto-connect honors deviceEnabled (SPEC-004b).
+                    _ensureMappingListeners();
                     _midiInit();
                     _synthInit();
                     _midiResume();
+                    _hydrateActiveKit();
 
                     _injectHud();
 
@@ -3566,7 +4401,10 @@
                     _activeInstance = null;
                     for (const inst of _instances) { _activeInstance = inst; break; }
                 }
-                if (_instances.size === 0) _midiReleaseSession();
+                if (_instances.size === 0) {
+                    _midiReleaseSession();
+                    _releaseMappingListeners();
+                }
                 teardown();   // includes _removeHud()
                 // Instances are reused across songs (destroy() → init()); stale
                 // applied/backing dims would suppress the first reframe of the
@@ -3657,7 +4495,95 @@
         BG_STYLE_IDS,
         FX_DEFAULTS,
         MIDI_TO_PIECE,
+        ALL_PIECES,
+        LS_KIT_CONFIG,
         HIT_TOLERANCE_S,
+        _parseVocabulary,
+        _parseKitNotes,
+        _applyVocabulary,
+        _applyActiveKitNotes,
+        _resetVocabulary,
+        _effectivePieceIds,
+        _midiToPiece,
+        _consumeCoreVocabulary,
+        _readKitConfig,
+        // INIT-002/SPEC-004 mapping editor seams (vm tests).
+        _beginKitOp,
+        _isCurrentKitOp,
+        _ensureMappingListeners,
+        _releaseMappingListeners,
+        _onDrumInputChange,
+        _refetchConfirmedKit,
+        _hydrateActiveKit,
+        _gmPieceForNote,
+        _buildMappingRows,
+        _midiOnMessage,
+        _completeLearn,
+        get _kitOpGen() { return _kitOpGen; },
+        get _confirmedKitId() { return _confirmedKitId; },
+        get _selectedKitId() { return _selectedKitId; },
+        get _learnPiece() { return _learnPiece; },
+        get _undoRecord() { return _undoRecord; },
+        get _mappingListenerCount() { return _mappingListenerCount; },
+        get _mappingUnsub() { return _mappingUnsub; },
+        get _notifiedMapping() { return _notifiedMapping.slice(); },
+        get _inputSettings() { return Object.assign({}, _inputSettings); },
+        get _lastSettingsRevision() { return _lastSettingsRevision; },
+        get _midiConnectSeq() { return _midiConnectSeq; },
+        get _midiActive() { return _midiActive; },
+        get _midiHandle() { return _midiHandle; },
+        get _midiInput() { return _midiInput; },
+        get _midiListener() { return _midiListener; },
+        get _synthVolume() { return _synthVolume; },
+        get _instancesSize() { return _instances.size; },
+        _midiConnect,
+        _midiDetach,
+        _midiReleaseSession,
+        _midiResume,
+        _midiAutoConnect,
+        _hydrateSharedInputSettings,
+        _writeSharedSettings,
+        _applySettingsState,
+        _readSavedPick,
+        _writeSavedPick,
+        _setActiveInstance(inst) { _activeInstance = inst || null; },
+        _addTestInstance() {
+            const dummy = { _handleDrumHit() {} };
+            _instances.add(dummy);
+            return dummy;
+        },
+        _removeTestInstance(dummy) {
+            _instances.delete(dummy);
+            if (_activeInstance === dummy) _activeInstance = null;
+        },
+        _setMidiInputImpl(mi) {
+            window.slopsmith = window.slopsmith || {};
+            window.slopsmith.midiInput = mi;
+        },
+        _setMappingFetch(fn) { _mappingFetchImpl = fn || null; },
+        _resetMappingState() {
+            _coreKitList = [];
+            _selectedKitId = null;
+            _confirmedKitId = null;
+            _confirmedKit = null;
+            _learnPiece = null;
+            _learnInFlight = false;
+            _undoRecord = null;
+            _mappingStatus = { message: '', kind: '' };
+            _lastMappingRevision = null;
+            _notifiedMapping = [];
+            _lastSettingsRevision = null;
+            _lastLocalSettingsRevision = null;
+            _applyingLocalSettings = false;
+            _seededLocalVolume = false;
+            _inputSettings = {
+                deviceEnabled: false,
+                midiChannel: -1,
+                hitDetection: false,
+                synthVolume: 0.7,
+            };
+            _applyActiveKitNotes(null);
+        },
     };
 
     // Headless verification hook (keys __keysHwTest pattern): lets

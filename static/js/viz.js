@@ -410,6 +410,8 @@ export function setViz(id) {
     }
     if (id === 'auto') {
         try { localStorage.setItem('vizSelection', 'auto'); } catch (_) {}
+        const autoSel = document.getElementById('viz-picker');
+        if (autoSel) autoSel.value = 'auto';
         _syncVenueVizPlayerClass('auto');
         if (window.v3VenueScene3d && typeof window.v3VenueScene3d.syncViz === 'function') {
             window.v3VenueScene3d.syncViz('auto');
@@ -507,11 +509,22 @@ export function setViz(id) {
 //
 // vizSelection stays 'auto' across invocations so the next song:ready
 // re-evaluates. An explicit picker choice overrides Auto by persisting
-// a different vizSelection.
+// a different vizSelection — `_autoMatchViz` also bails unless the picker
+// value is still 'auto' (INIT-002/SPEC-005, GR-006).
 //
 // Enumerates viz plugins by walking the picker's own <option> list —
 // that's the canonical set built by _populateVizPicker above and keeps
 // us from needing a second module-level registry.
+//
+// Drum arrangements (INIT-002/SPEC-005, REQ-006): `drum_highway_3d` is
+// lifted to the front of that walk so Auto prefers the 3D drum highway
+// when the plugin is registered, WebGL2 is available, and its existing
+// `matchesArrangement` predicate claims the song. Directory order can
+// no longer let a 2D drums plugin (or any earlier-sorting match) steal
+// a drum chart. When 3D is missing or gated off (`contextType='webgl2'`
+// + no WebGL2), the walk continues and the 2D drum highway remains the
+// fallback. Non-drum Auto priority is otherwise unchanged: relative
+// order of every other candidate is preserved.
 // Helper: update the closed-state label of the Auto option to show what was resolved.
 // Resets to the base label when called with no argument (at evaluation start).
 // _autoVizBaseLabel is captured from the DOM on first call so the reset text
@@ -625,9 +638,22 @@ export function _maybeShowNotationViewHint(activeVizId) {
     return true;
 }
 
+// INIT-002/SPEC-005: 3D drum highway is primary in Auto. Lift it to the
+// front of the first-match-wins walk without reshuffling any other id.
+const _DRUM_3D_VIZ_ID = 'drum_highway_3d';
+function _prioritizeAutoVizIds(ids) {
+    if (!Array.isArray(ids) || !ids.includes(_DRUM_3D_VIZ_ID)) return ids.slice();
+    return [_DRUM_3D_VIZ_ID, ...ids.filter((id) => id !== _DRUM_3D_VIZ_ID)];
+}
+
 export function _autoMatchViz() {
     const sel = document.getElementById('viz-picker');
     if (!sel) return;
+    // GR-006: never replace an explicit user visualization choice with 3D
+    // (or any other Auto resolution). Callers already gate on sel.value,
+    // but a direct call — tests, a stray song:ready race — must not
+    // clobber a persisted picker selection.
+    if (sel.value !== 'auto') return;
     // Pass null here: sel.value is 'auto', which is never a valid viz-id hint
     // key. Passing 'auto' would incorrectly drop hints whose data-viz-id is
     // 'default' (the resolved renderer after a no-match pass), making the
@@ -658,13 +684,15 @@ export function _autoMatchViz() {
     //   1. First match wins among registered viz plugins — keep each
     //      plugin's matchesArrangement predicate narrow to avoid
     //      stealing songs from more specialized viz.
-    //   2. If you need a strict priority when multiple plugins match
-    //      the same song, name the higher-priority plugin's directory
-    //      earlier alphabetically. The picker dropdown reveals the
-    //      actual tiebreaker at a glance.
-    const candidateIds = Array.from(sel.options)
-        .map(o => o.value)
-        .filter(v => v !== 'auto' && v !== 'default');
+    //   2. Drum charts are the exception (INIT-002/SPEC-005):
+    //      `drum_highway_3d` is always tried first when it is a
+    //      candidate. For every other id, directory order remains the
+    //      tiebreaker — the picker dropdown still reveals it.
+    const candidateIds = _prioritizeAutoVizIds(
+        Array.from(sel.options)
+            .map(o => o.value)
+            .filter(v => v !== 'auto' && v !== 'default'),
+    );
     for (const id of candidateIds) {
         const factory = window['feedBackViz_' + id];
         if (typeof factory !== 'function') continue;

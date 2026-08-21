@@ -112,7 +112,14 @@
         }
     }
 
-    let settings = { instrument: 'guitar', string_count: 6, tuning: 'Standard', reference_pitch: 440, pathway: 'songs', instrument_profiles: {}, active_instrument_profile: 'guitar-lead' };
+    // INIT-001/SPEC-004: additive identity, default unset (not inferred from
+    // `instrument` or `paths[]`). Only `drums` gates the three named surfaces.
+    const PLAYER_INSTRUMENT_ENUM = ['guitar', 'bass', 'drums', 'keys', 'vocals'];
+    function normalizePlayerInstrument(raw) {
+        return PLAYER_INSTRUMENT_ENUM.includes(raw) ? raw : null;
+    }
+
+    let settings = { instrument: 'guitar', string_count: 6, tuning: 'Standard', reference_pitch: 440, pathway: 'songs', instrument_profiles: {}, active_instrument_profile: 'guitar-lead', player_instrument: null };
 
     async function loadTunings() {
         try {
@@ -184,6 +191,7 @@
                     pathway: pathway,
                     instrument_profiles: profiles,
                     active_instrument_profile: typeof s.active_instrument_profile === 'string' ? s.active_instrument_profile : profileIdForInstrument(instrument),
+                    player_instrument: normalizePlayerInstrument(s.player_instrument),
                 };
             }
         } catch (e) { /* settings endpoint always present */ }
@@ -253,6 +261,48 @@
         const btn = document.getElementById('tuner-toggle-btn');
         if (btn) btn.click();
         // else: tuner plugin not installed — no-op.
+    }
+
+    // INIT-001/SPEC-003: host-side plugin presence. Prefer the live API
+    // (`window.tuner.toggle`) over sniffing `#tuner-plugin-ui`, which does not
+    // exist until the plugin mounts. The loader Map is the fallback when the
+    // script has evaluated but the API object is not yet assigned.
+    function tunerPluginPresent() {
+        if (window.tuner && typeof window.tuner.toggle === 'function') return true;
+        const loaded = window.feedBack && window.feedBack._loadedPluginScripts;
+        return !!(loaded && typeof loaded.has === 'function' && loaded.has('tuner'));
+    }
+
+    // Presence only. SPEC-004 adds `player_instrument === 'drums'` as a second
+    // conjunct here — keep that check out of tunerPluginPresent().
+
+    // INIT-001/SPEC-004: plugin presence AND player_instrument. Keep the drums
+    // check out of tunerPluginPresent() so SPEC-003's presence tests stay valid.
+    // Explicit `{ pluginPresent, playerInstrument }` is the unit-test truth table;
+    // the live call (no args) also requires window.tuner.toggle before painting.
+    function shouldShowTunerBadge(opts) {
+        opts = opts || {};
+        const pluginPresent = Object.prototype.hasOwnProperty.call(opts, 'pluginPresent')
+            ? !!opts.pluginPresent
+            : tunerPluginPresent();
+        const playerInstrument = Object.prototype.hasOwnProperty.call(opts, 'playerInstrument')
+            ? opts.playerInstrument
+            : settings.player_instrument;
+        if (playerInstrument === 'drums') return false;
+        if (!pluginPresent) return false;
+        if (Object.prototype.hasOwnProperty.call(opts, 'pluginPresent')) return true;
+        // A Map-only hit is not yet a clickable control; wait for toggle.
+        return !!(window.tuner && typeof window.tuner.toggle === 'function');
+    }
+
+    // INIT-001/SPEC-004: remaining automatic mic / AudioContext start path.
+    // Unset / guitar / bass / keys / vocals keep SPEC-003's baseline (allow).
+    function shouldAutoStartTunerAudio(opts) {
+        opts = opts || {};
+        const playerInstrument = Object.prototype.hasOwnProperty.call(opts, 'playerInstrument')
+            ? opts.playerInstrument
+            : settings.player_instrument;
+        return playerInstrument !== 'drums';
     }
 
     // ── Live tuner badge helpers ──────────────────────────────────────────--
@@ -327,6 +377,13 @@
     function renderTuner() {
         const host = document.getElementById('v3-badge-tuner');
         if (!host) return;
+        // INIT-001/SPEC-003: empty the stable shell host rather than emitting a
+        // dead button. Shell keeps `#v3-badge-tuner` so SPEC-004 can restyle
+        // without fighting this gate.
+        if (!shouldShowTunerBadge()) {
+            host.innerHTML = '';
+            return;
+        }
         const hz = Math.round(settings.reference_pitch || 440);
         const initNote = typeof settings.tuning === 'string'
             ? (TUNING_NOTE[settings.tuning] || 'E') : lowStringNote(settings.tuning);
@@ -406,6 +463,9 @@
     const guitarIcon =
         '<svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">' +
         '<path d="M21.66 3.34a1.2 1.2 0 0 0-1.7 0l-2.1 2.1-.7-.7a1 1 0 0 0-1.42 1.42l.3.3-6.06 6.05a4.5 4.5 0 1 0 1.42 1.42l6.05-6.06.3.3a1 1 0 0 0 1.42-1.42l-.7-.7 2.1-2.1a1.2 1.2 0 0 0 0-1.7zM7 19a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>';
+    const drumsIcon =
+        '<svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true">' +
+        '<ellipse cx="12" cy="10" rx="8" ry="3.5"/><path d="M4 10v5.5c0 1.9 3.6 3.5 8 3.5s8-1.6 8-3.5V10"/><path d="m8 4 2.5 4M16 4l-2.5 4"/></svg>';
 
     // Instrument-menu open/close helpers keyed by id (NOT a captured element),
     // so they survive renderInstrument() replacing the menu node. closeInstMenu
@@ -430,9 +490,38 @@
         document.addEventListener('click', closeInstMenu, { once: true });
     }
 
+    function openSettingsEscape() {
+        // INIT-001/SPEC-004 und-4: drums card must not strand the user — Settings
+        // is the reversible control. Do not hide #v3-badge-instrument wholesale.
+        if (typeof window.showScreen === 'function') {
+            try { window.showScreen('settings'); } catch (_) { /* noop */ }
+        }
+    }
+
+    function renderDrumsInstrumentCard(host) {
+        host.innerHTML =
+            '<div id="v3-instrument-wrap" class="relative">' +
+            '<button type="button" data-inst-toggle title="Main instrument: Drums. Open Settings to change." ' +
+            'class="bg-fb-card border border-fb-border/50 rounded-2xl h-[92px] w-16 flex flex-col items-center justify-center gap-1.5 hover:ring-1 hover:ring-fb-primary/40 transition">' +
+            drumsIcon +
+            '<span class="text-[0.5625rem] leading-none font-semibold max-w-full truncate px-0.5 text-fb-textDim">Drums</span>' +
+            '</button></div>';
+        const toggle = host.querySelector('[data-inst-toggle]');
+        if (toggle) toggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openSettingsEscape();
+        });
+    }
+
     function renderInstrument() {
         const host = document.getElementById('v3-badge-instrument');
         if (!host) return;
+        // INIT-001/SPEC-004: drums-shaped summary replaces the guitar/bass pills
+        // (Strings / Handedness / Tuning). Do not add a Drums pill onto that row.
+        if (settings.player_instrument === 'drums') {
+            renderDrumsInstrumentCard(host);
+            return;
+        }
         const wt = workingTuningInfo();
         host.innerHTML =
             '<div id="v3-instrument-wrap" class="relative">' +
@@ -568,7 +657,16 @@
             (active ? 'bg-fb-primary text-white' : 'bg-gray-800/50 text-fb-textDim hover:text-fb-text') + '">' + esc(label) + '</button>';
     }
 
-    window.v3Badges = { reload: async () => { await Promise.all([loadTunings(), loadSettings()]); renderInstrument(); renderTuner(); } };
+    window.v3Badges = {
+        reload: async () => { await Promise.all([loadTunings(), loadSettings()]); renderInstrument(); renderTuner(); },
+        // Late-load handshake: tuner/screen.js calls this after publishing window.tuner
+        // (no plugins:loaded event exists on the host).
+        renderTuner: renderTuner,
+        // INIT-001/SPEC-004: identity + gating helpers (tests + tuner auto-start).
+        shouldShowTunerBadge: shouldShowTunerBadge,
+        shouldAutoStartTunerAudio: shouldAutoStartTunerAudio,
+        getPlayerInstrument: () => settings.player_instrument,
+    };
 
     async function boot() {
         await Promise.all([loadTunings(), loadSettings()]);

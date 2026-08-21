@@ -136,6 +136,11 @@
     <script type="module" src="/static/capabilities/chart-transform.js"></script>
     <script type="module" src="/static/capabilities/note-detection.js"></script>
     <script type="module" src="/static/capabilities/midi-input.js"></script>
+    <!-- INIT-002/SPEC-002: shared drum MIDI-input/settings contract for the
+         2D and 3D drum highways. Loaded after midi-input.js for consistency
+         with the other domain-adjacent capabilities above, though it does
+         not itself call into midi-input.js (device identity stays there). -->
+    <script type="module" src="/static/capabilities/drum-input.js"></script>
     <script type="module" src="/static/capabilities/interface-scale.js"></script>
 </head>
 <body class="h-screen flex overflow-hidden bg-fb-sidebar text-fb-text font-display">
@@ -448,6 +453,26 @@
                                 <option value="Lead">Lead</option>
                                 <option value="Rhythm">Rhythm</option>
                                 <option value="Bass">Bass</option>
+                            </select>
+                        </div>
+                    </div>
+                    <!-- INIT-001/SPEC-004: additive main-instrument identity. Does not
+                         widen the guitar/bass `instrument` key. Unset = today's UI. -->
+                    <div class="fb-srow">
+                        <span class="fb-srow-icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.79 2-4 2s-4-.895-4-2 1.79-2 4-2 4 .895 4 2zm12-3c0 1.105-1.79 2-4 2s-4-.895-4-2 1.79-2 4-2 4 .895 4 2zM9 10l12-3"/></svg></span>
+                        <div class="fb-srow-main">
+                            <div class="fb-srow-title">Main instrument</div>
+                            <div class="fb-srow-desc">What you play most. Drums hides the tuner badge and skips the tune-up tour step. Not set keeps today's behavior.</div>
+                        </div>
+                        <div class="fb-srow-control">
+                            <select id="setting-player-instrument" aria-label="Main instrument" onchange="setPlayerInstrument(this.value)"
+                                class="bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                                <option value="">Not set</option>
+                                <option value="guitar">Guitar</option>
+                                <option value="bass">Bass</option>
+                                <option value="drums">Drums</option>
+                                <option value="keys">Keys</option>
+                                <option value="vocals">Vocals</option>
                             </select>
                         </div>
                     </div>

@@ -51,6 +51,7 @@ import tailwind_rebuild
 # Extracted route modules. They import `appstate`, never `server` — one-way graph.
 from routers import audio_effects, artist_aliases, loops, playlists, ws_highway, ws_sync, chart, wanted, library_extras, shop, progression, profile, stats, version, diagnostics
 from routers import tunings as tunings_router
+from routers import drums as drums_router
 import enrichment
 from routers import art as art_router
 from routers import settings as settings_router
@@ -1463,6 +1464,9 @@ appstate.configure(default_settings=_default_settings)
 
 # GET /api/tunings → routers/tunings.py (R3, reads config + appstate.tuning_providers)
 app.include_router(tunings_router.router)
+
+# GET/PUT/DELETE /api/drums/... → routers/drums.py (INIT-001/SPEC-002)
+app.include_router(drums_router.router)
 
 
 

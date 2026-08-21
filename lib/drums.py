@@ -8,7 +8,9 @@ referenced from `manifest.yaml` via the `drum_tab:` key (see
 - their default GM percussion MIDI notes and visual category,
 - preset lane configurations for the drums plugin,
 - a permissive validator + short-key wire helper used by both the writer
-  side (importers) and the reader side (sloppak loader + highway WS).
+  side (importers) and the reader side (sloppak loader + highway WS),
+- device kit records (`note_to_piece`, `load_kits`) that overlay GM
+  (INIT-001/SPEC-001).
 
 The schema is intentionally extensible: unknown piece-ids round-trip through
 the loader so a newer sloppak can still play on an older client that just
@@ -18,8 +20,10 @@ top-level shape (`version`, `kit`, `hits` types).
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+from pathlib import Path
 
 log = logging.getLogger("feedBack.lib.drums")
 
@@ -287,3 +291,271 @@ def normalise_kit(kit: list | None) -> list[dict]:
             name = pid.replace("_", " ").title()
         out.append({"id": pid, "name": name})
     return out
+
+
+# ── Device kit records (INIT-001/SPEC-001) ────────────────────────────────────
+#
+# Additive overlay on midi_to_piece(). A kit remaps device MIDI notes onto
+# PIECES ids. kit=None is byte-identical to today's GM table. User kits later
+# live under {config_dir}/drums/ (SPEC-002); this module only reads directories
+# it is handed.
+
+# Bundled presets. Callers that want the shipped set pass this path as
+# shipped_dir — this module does not scan it at import time.
+SHIPPED_KITS_DIR = Path(__file__).resolve().parent.parent / "data" / "drums" / "kits"
+
+# Prototype-pollution keys. json.loads will happily create them as ordinary
+# dict keys; if that dict is later serialized to a JS client they become
+# setters. Strip on every load, never raise.
+_DANGEROUS_KIT_KEYS = frozenset({"__proto__", "constructor", "prototype"})
+
+# Closed hi-hat when CC value is at or above this. MIDI midpoint; a kit may
+# later carry its own threshold, but the shipped schema has no such field.
+_HH_CC_CLOSED_AT = 64
+
+_HH_STRIKE_IDS = frozenset({"hh_open", "hh_closed"})
+
+
+def _strip_dangerous_keys(obj: object) -> object:
+    """Drop __proto__/constructor/prototype keys at every dict level."""
+    if not isinstance(obj, dict):
+        return obj
+    return {
+        k: _strip_dangerous_keys(v)
+        for k, v in obj.items()
+        if k not in _DANGEROUS_KIT_KEYS
+    }
+
+
+def _kit_id_ok(kit_id: object) -> bool:
+    """Reject ids that cannot be used as a filename (SPEC-002 consumes them)."""
+    if not isinstance(kit_id, str) or not kit_id:
+        return False
+    if "\x00" in kit_id:
+        return False
+    if "/" in kit_id or "\\" in kit_id:
+        return False
+    if ".." in kit_id:
+        return False
+    return True
+
+
+def _parse_note_key(raw) -> int | None:
+    if isinstance(raw, bool):
+        return None
+    try:
+        note = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= note <= 127:
+        return None
+    return note
+
+
+def _normalise_hihat(raw: object) -> dict:
+    if not isinstance(raw, dict):
+        return {
+            "pedal_cc": None,
+            "open": "hh_open",
+            "closed": "hh_closed",
+            "pedal": "hh_pedal",
+        }
+    out = {
+        "pedal_cc": None,
+        "open": "hh_open",
+        "closed": "hh_closed",
+        "pedal": "hh_pedal",
+    }
+    cc = raw.get("pedal_cc")
+    if not isinstance(cc, bool) and isinstance(cc, int):
+        out["pedal_cc"] = cc
+    for field in ("open", "closed", "pedal"):
+        val = raw.get(field)
+        if isinstance(val, str) and val in PIECES:
+            out[field] = val
+    return out
+
+
+def _parse_kit(obj: object) -> dict | None:
+    """Turn a parsed JSON object into a kit record, or None if unusable."""
+    if not isinstance(obj, dict):
+        return None
+    cleaned = _strip_dangerous_keys(obj)
+    if not isinstance(cleaned, dict):
+        return None
+    kit_id = cleaned.get("id")
+    if not _kit_id_ok(kit_id):
+        log.warning("kit: rejecting record with unsafe or missing id %r", kit_id)
+        return None
+    name = cleaned.get("name")
+    if not isinstance(name, str) or not name:
+        name = kit_id
+    notes_raw = cleaned.get("notes", {})
+    if notes_raw is None:
+        notes_raw = {}
+    if not isinstance(notes_raw, dict):
+        log.warning("kit %s: notes is not an object — skipping", kit_id)
+        return None
+    notes: dict[int, str] = {}
+    for key, piece in notes_raw.items():
+        note = _parse_note_key(key)
+        if note is None:
+            continue
+        if not isinstance(piece, str) or piece not in PIECES:
+            log.debug("kit %s: ignoring unmapped piece-id %r for note %s", kit_id, piece, note)
+            continue
+        notes[note] = piece
+    verified = cleaned.get("verified")
+    if not isinstance(verified, bool):
+        verified = False
+    manufacturer = cleaned.get("manufacturer")
+    if not isinstance(manufacturer, str) or not manufacturer:
+        manufacturer = None
+    source = cleaned.get("source")
+    if not isinstance(source, str) or not source:
+        source = None
+    return {
+        "id": kit_id,
+        "name": name,
+        "manufacturer": manufacturer,
+        "verified": verified,
+        "notes": notes,
+        "hihat": _normalise_hihat(cleaned.get("hihat")),
+        "source": source,
+    }
+
+
+def load_kit_file(data: bytes | str | Path) -> dict | None:
+    """Parse one kit JSON document. Returns None on a malformed or unsafe record.
+
+    Accepts the bytes (or text) of the file, or a Path to read. Path
+    containment of *which* file is SPEC-002's job; this function still
+    ignores a non-dict root and strips prototype-pollution keys.
+    """
+    if isinstance(data, Path):
+        try:
+            payload = data.read_bytes()
+        except OSError as exc:
+            log.warning("kit: failed to read %s: %s", data, exc)
+            return None
+    else:
+        payload = data
+    try:
+        obj = json.loads(payload)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        log.warning("kit: invalid JSON (%s)", exc)
+        return None
+    return _parse_kit(obj)
+
+
+def _load_dir(directory: Path | None, into: dict[str, dict]) -> None:
+    if directory is None:
+        return
+    try:
+        path = Path(directory)
+    except TypeError:
+        return
+    if not path.is_dir():
+        return
+    try:
+        files = sorted(path.glob("*.json"))
+    except OSError as exc:
+        log.warning("kit: cannot list %s: %s", path, exc)
+        return
+    for f in files:
+        kit = load_kit_file(f)
+        if kit is None:
+            continue
+        into[kit["id"]] = kit
+
+
+def load_kits(shipped_dir: Path | None, user_dir: Path | None = None) -> dict[str, dict]:
+    """Load shipped kits, then overlay user kits keyed by ``id``.
+
+    A user kit with the same id replaces the shipped one. Each malformed
+    file is skipped (warning) so one bad JSON cannot hide the rest.
+    """
+    out: dict[str, dict] = {}
+    _load_dir(shipped_dir, out)
+    _load_dir(user_dir, out)
+    return out
+
+
+def _hh_piece_ids(kit: dict | None) -> tuple[str, str, str]:
+    hihat = kit.get("hihat") if isinstance(kit, dict) else None
+    if not isinstance(hihat, dict):
+        return "hh_open", "hh_closed", "hh_pedal"
+    open_id = hihat.get("open") if hihat.get("open") in PIECES else "hh_open"
+    closed_id = hihat.get("closed") if hihat.get("closed") in PIECES else "hh_closed"
+    pedal_id = hihat.get("pedal") if hihat.get("pedal") in PIECES else "hh_pedal"
+    return open_id, closed_id, pedal_id
+
+
+def _lookup_kit_note(kit: dict | None, note: int) -> str | None:
+    if not isinstance(kit, dict):
+        return None
+    notes = kit.get("notes")
+    if not isinstance(notes, dict):
+        return None
+    piece = notes.get(note)
+    if piece is None:
+        piece = notes.get(str(note))
+    if isinstance(piece, str) and piece in PIECES:
+        return piece
+    return None
+
+
+def _apply_hh_pedal(note: int, mapped: str | None, kit: dict | None, hh_pedal: object) -> str | None:
+    """Resolve a hat strike against live pedal state. Omitted state is a no-op."""
+    if not isinstance(hh_pedal, dict):
+        return mapped
+    open_id, closed_id, pedal_id = _hh_piece_ids(kit)
+    strike_ids = _HH_STRIKE_IDS | {open_id, closed_id}
+    kind = hh_pedal.get("kind")
+    if kind == "note":
+        try:
+            pedal_note = int(hh_pedal.get("midi"))
+        except (TypeError, ValueError):
+            return mapped
+        if note == pedal_note:
+            return pedal_id
+        return mapped
+    if kind == "cc":
+        if mapped not in strike_ids:
+            return mapped
+        try:
+            value = int(hh_pedal.get("value"))
+        except (TypeError, ValueError):
+            return mapped
+        hihat = kit.get("hihat") if isinstance(kit, dict) else None
+        want_cc = hihat.get("pedal_cc") if isinstance(hihat, dict) else None
+        got_cc = hh_pedal.get("controller")
+        if want_cc is not None and got_cc is not None:
+            try:
+                if int(got_cc) != int(want_cc):
+                    return mapped
+            except (TypeError, ValueError):
+                pass
+        return closed_id if value >= _HH_CC_CLOSED_AT else open_id
+    return mapped
+
+
+def note_to_piece(midi, *, kit=None, hh_pedal=None) -> str | None:
+    """Resolve a device MIDI note to a canonical PIECES id.
+
+    With ``kit=None`` this is identical to ``midi_to_piece``. A kit's
+    ``notes`` map wins for listed notes; anything else falls through to GM.
+    ``hh_pedal`` is either ``{kind: "cc", controller, value}`` or
+    ``{kind: "note", midi}``. When it is omitted, a hat strike still returns
+    whatever piece the note already mapped to.
+    """
+    if isinstance(midi, bool):
+        return None
+    try:
+        note = int(midi)
+    except (TypeError, ValueError):
+        return None
+    mapped = _lookup_kit_note(kit, note)
+    if mapped is None:
+        mapped = midi_to_piece(note)
+    return _apply_hh_pedal(note, mapped, kit, hh_pedal)

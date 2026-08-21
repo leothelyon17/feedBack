@@ -337,6 +337,24 @@ test('auto-open is gated off when the setting is disabled (opt-in)', async () =>
     assert.equal(sandbox.__enableCalls.length, 0);
 });
 
+test('INIT-001/SPEC-004: drums player_instrument blocks auto-open enable/mic', async () => {
+    const sandbox = createTunerSandbox();
+    sandbox.window.v3Badges = { shouldAutoStartTunerAudio: () => false };
+    sandbox.window._tunerAutoOpen.resetState();
+    await ready(sandbox, CUSTOM_GUITAR);
+    await ready(sandbox, E_STANDARD);
+    assert.equal(sandbox.__enableCalls.length, 0);
+});
+
+test('INIT-001/SPEC-004: missing host helper keeps SPEC-003 auto-open baseline', async () => {
+    const sandbox = createTunerSandbox();
+    sandbox.window.v3Badges = { renderTuner() {} };
+    sandbox.window._tunerAutoOpen.resetState();
+    await ready(sandbox, CUSTOM_GUITAR);
+    await ready(sandbox, E_STANDARD);
+    assert.equal(sandbox.__enableCalls.length, 1);
+});
+
 test('auto-open enables in persist mode (passes { auto: true })', async () => {
     const sandbox = createTunerSandbox();
     sandbox.window._tunerAutoOpen.resetState();

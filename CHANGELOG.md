@@ -8,6 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Auto mode prefers the 3D drum highway (#127, INIT-002/SPEC-005).** For a
+  drum arrangement, Auto selects `drum_highway_3d` when the plugin is
+  registered and WebGL2 is available, falls back to the 2D drum highway
+  when 3D is missing or unsupported, and never replaces an explicit
+  visualization picker choice. Core-local fake 2D/3D consumers cover
+  mapping/settings round trips, API failure, stale events, and switch-cycle
+  listener counts against the version-1 drum-input contract.
+- **Atomic per-note drum kit mutations (#127).** `PUT`/`DELETE
+  /api/drums/kits/{kit_id}/notes/{midi_note}` set or remove a single
+  MIDI-note-to-piece mapping under the existing kit lock (load → clone
+  shipped-if-needed → mutate → validate → atomic write), so both drum
+  highways can edit one note without racing a whole-kit read/modify/write.
+  DELETE reports the GM fallback (or `unmapped`) provenance and is
+  idempotent. Never writes to the shipped kit tree.
+- **Shared drum MIDI-input/settings contract (#127).** A new core capability
+  (`static/capabilities/drum-input.js`, `window.feedBack.drumInput`) is the
+  single versioned source of truth for MIDI device enablement, channel, hit
+  detection, and synth volume shared by the 2D and 3D drum highways.
+  Persists to `feedback_drums_input_v1` with a deterministic
+  `(clock, origin, sequence)` last-write-wins revision; same-tab consumers
+  get a live `feedback:drum-input-change` event, cross-tab consumers get it
+  via the canonical key's `storage` event. Migrates missing fields from the
+  2D plugin's existing keys and the 3D highway's, with bounded dual writes
+  back to both during the compatibility window. Device identity stays owned
+  by `feedBack.midiInput`; kit-note mappings stay owned by the atomic kit
+  API above — this contract only re-broadcasts mapping-change notifications.
+- **3D drum highway consumes shared MIDI settings (#127, INIT-002/SPEC-004b).**
+  The 3D highway reads MIDI source enablement, channel, hit detection, and
+  synth volume from `window.feedBack.drumInput`. Source None disconnects and
+  stays disabled; channel/hits/volume apply live in both directions without
+  echoing. Device identity keys (`drum_h3d_midi_pick_v2`,
+  `drum_h3d_midi_input`) and kit mapping UI are unchanged.
+- **3D drum highway kit mapping editor (#127, INIT-002/SPEC-004).** The 3D
+  settings panel lists core kits, requires an explicit **Use this kit**
+  confirmation before Learn/edit/remove, and shows custom (removable),
+  GM-default, and Unmapped provenance. Mapping mutations use the atomic
+  per-note API and `notifyMappingChange`; `drum_h3d_kit_v1` stays visual
+  lane layout only. Shared device/channel/hits/volume consumption is
+  deferred to SPEC-004b.
+- **Main instrument setting gates tuner chrome (#127).** Additive `player_instrument` in Settings (explicit Not set). When the value is `drums`, the tuner badge, onboarding tour `tuner` step, and remaining auto-mic path are suppressed; Settings and Pedalboard stay reachable. Changing away from drums restores those surfaces without a page reload.
+- **Drum kit HTTP surface and player instrument setting (#127).** `/api/drums/vocabulary` and kit CRUD persist user kits under `{config_dir}/drums/` with path containment. Additive `player_instrument` and `active_kit` settings do not widen `instrument`.
+- **3D drum highway vocabulary consume.** The bundled 3D highway overlays core piece-ids and `active_kit` when the API is available, and keeps local `MIDI_TO_PIECE` / `drum_h3d_kit_v1` as fallbacks.
+- **Canonical drum kit mapping (#127).** Device MIDI notes resolve to
+  piece-ids through an additive kit layer (`note_to_piece`); with no kit
+  active the path is byte-identical to today's GM `midi_to_piece()`. Ships an
+  unverified Alesis Strata Prime preset as data (`verified: false`).
+- **Tuner badge presence gate and gestured mic start.** The v3 tuner badge
+  renders only when the tuner plugin is loaded; mic/`AudioContext` start waits
+  for a user gesture instead of firing at boot.
 - **Core reader for source rigs (feedpak 1.18.0).** A pack can declare what a
   MIDI part should sound like by binding a rig; core now reads that binding and
   hands it to the client instead of dropping it. Three parts: the
