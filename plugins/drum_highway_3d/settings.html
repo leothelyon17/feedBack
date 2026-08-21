@@ -199,7 +199,45 @@
             <option value="">— none —</option>
         </select>
         <p class="text-xs text-gray-500 mt-1">
-            Auto-picks the first non-passthrough input on load. Pick "none" to pause hit and miss tracking.
+            Auto-picks the first non-passthrough input on load when a source
+            is enabled. Pick "none" to disconnect; the source stays disabled
+            until you select a device.
+        </p>
+
+        <label for="drumh3d-midi-channel" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">MIDI channel</label>
+        <select id="drumh3d-midi-channel"
+            onchange="window.drumH3dSetMidiChannel && window.drumH3dSetMidiChannel(this.value)"
+            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 outline-none">
+            <option value="-1">All</option>
+            <option value="9">10 (Drums)</option>
+            <option value="0">1</option>
+            <option value="1">2</option>
+            <option value="2">3</option>
+            <option value="3">4</option>
+            <option value="4">5</option>
+            <option value="5">6</option>
+            <option value="6">7</option>
+            <option value="7">8</option>
+            <option value="8">9</option>
+            <option value="10">11</option>
+            <option value="11">12</option>
+            <option value="12">13</option>
+            <option value="13">14</option>
+            <option value="14">15</option>
+            <option value="15">16</option>
+        </select>
+        <p class="text-xs text-gray-500 mt-1">
+            Filter live MIDI note-on by channel. All accepts every channel.
+        </p>
+
+        <label for="drumh3d-hit-detect" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
+            <input type="checkbox" id="drumh3d-hit-detect"
+                onchange="window.drumH3dSetHitDetection && window.drumH3dSetHitDetection(this.checked)">
+            Hit detection
+        </label>
+        <p class="text-xs text-gray-500 mt-1">
+            Score pad hits against the chart. Off keeps the device connected
+            and still sounds the kit.
         </p>
 
         <label for="drumh3d-synth-vol" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">
@@ -719,8 +757,14 @@
             const volLabel = document.getElementById('drumh3d-synth-vol-val');
             if (volSlider) volSlider.value = String(vol);
             if (volLabel) volLabel.textContent = parseFloat(vol).toFixed(2);
+
+            const chSel = document.getElementById('drumh3d-midi-channel');
+            if (chSel && window.drumH3dGetMidiChannel) chSel.value = String(window.drumH3dGetMidiChannel());
+            const hits = document.getElementById('drumh3d-hit-detect');
+            if (hits && window.drumH3dGetHitDetection) hits.checked = !!window.drumH3dGetHitDetection();
         }
         window.addEventListener('drum_h3d:midi_devices', renderMidiPicker);
+        window.addEventListener('drum_h3d:input', renderMidiPicker);
         // Kick off MIDI initialisation if the player viz never ran (user
         // opened Settings → 3D Drum Highway directly). _midiInit is
         // idempotent so this is safe even when the viz is also active.

@@ -570,8 +570,8 @@
     const _MIDI_BLOCKLIST_RE = /midi through|^thru\b|^iac\b/i;
 
     // MIDI is sourced from the core `midi-input` capability domain
-    // (window.slopsmith.midiInput) rather than a private requestMIDIAccess() —
-    // one device-access boundary shared with piano/drums/keys/onboarding.
+    // (window.slopsmith.midiInput) rather than a private Web MIDI permission
+    // call — one device-access boundary shared with piano/drums/keys/onboarding.
     const _MIDI_REQUESTER = 'drum_highway_3d';
     let _midiReady = false;      // discover() has run
     let _midiHandle = null;      // live domain session handle (addListener/removeListener)
@@ -629,6 +629,7 @@
     let _midiInitInFlight = null;
     let _midiConnectSeq = 0;     // generation guard for async _midiConnect races
     async function _midiInit() {
+        _hydrateSharedInputSettings();
         if (_midiReady) {
             // Only (re)connect when there's no live session. A repeated init
             // (settings panel open, extra splitscreen instance) must NOT re-enter
@@ -643,7 +644,7 @@
         if (!mi) return;
         _midiInitInFlight = (async () => {
             try {
-                const r = await mi.discover();   // permission boundary (requestMIDIAccess, in core)
+                const r = await mi.discover();   // permission boundary lives in core midi-input
                 // Only latch ready on a successful discovery — a denied/unavailable
                 // outcome must NOT latch, or reopening never retries the prompt.
                 if (!r || r.outcome !== 'handled') return;
@@ -671,28 +672,50 @@
     }
 
     function _readSavedPick() {
-        // New v2 storage: {id, name} JSON. Falls back to legacy v1 id-only.
-        // Coerce id/name to strings so _midiAutoConnect can safely call
-        // .toLowerCase() even if the stored JSON was manually edited.
+        // Identity lives on {id, name, key}. SPEC-002 dual-writes a settings
+        // snapshot onto the same key (no identity fields) — fall through to
+        // drum_h3d_midi_input in that case so a settings update cannot look
+        // like an explicit None opt-out (INIT-002/SPEC-004b).
         try {
             const v2 = _readStore(LS_MIDI_PICK);
             if (v2) {
                 const obj = JSON.parse(v2);
                 if (obj && typeof obj === 'object') {
-                    return { id: String(obj.id || ''), name: String(obj.name || ''), key: String(obj.key || '') };
+                    const id = String(obj.id || '');
+                    const name = String(obj.name || '');
+                    const key = String(obj.key || '');
+                    if (id || name || key) return { id, name, key };
                 }
             }
         } catch (_) {}
         const v1 = _readStore(LS_MIDI_INPUT);
-        if (typeof v1 === 'string') return { id: v1, name: '' };
+        if (typeof v1 === 'string') return { id: v1, name: '', key: '' };
         return null;
     }
 
     function _writeSavedPick(id, name, key) {
+        _savedPickMem = { id: id || '', name: name || '', key: key || '' };
+        _persistPickRecord();
+    }
+
+    function _persistPickRecord() {
+        // Merge identity with the shared settings snapshot so SPEC-002's
+        // dual-write shape and 3D's {id,name,key} identity coexist on
+        // drum_h3d_midi_pick_v2 during the compatibility window.
+        if (!_savedPickMem) {
+            const existing = _readSavedPick();
+            if (existing) _savedPickMem = { id: existing.id || '', name: existing.name || '', key: existing.key || '' };
+        }
+        const ident = _savedPickMem || { id: '', name: '', key: '' };
         try {
-            localStorage.setItem(LS_MIDI_PICK, JSON.stringify({ id: id || '', name: name || '', key: key || '' }));
-            // Keep the legacy key in sync so a downgrade is non-destructive.
-            localStorage.setItem(LS_MIDI_INPUT, id || '');
+            localStorage.setItem(LS_MIDI_PICK, JSON.stringify({
+                id: ident.id, name: ident.name, key: ident.key,
+                deviceEnabled: _inputSettings.deviceEnabled,
+                midiChannel: _inputSettings.midiChannel,
+                hitDetection: _inputSettings.hitDetection,
+                synthVolume: _inputSettings.synthVolume,
+            }));
+            localStorage.setItem(LS_MIDI_INPUT, ident.id || '');
         } catch (_) {}
     }
 
@@ -701,6 +724,9 @@
         // fallback input, because _midiConnect persists the pick and that would
         // overwrite the user's saved device on a transient multi-device unplug
         // (the original returns on replug and reconnects then).
+        // SPEC-004b: deviceEnabled false (explicit None, or a 2D disable)
+        // must not auto-flip a source back on.
+        if (!_inputSettings.deviceEnabled) return;
         if (allowFallback === undefined) allowFallback = true;
         const inputs = _midiSources();
         if (!inputs.length) return;
@@ -772,6 +798,17 @@
                         if (!_midiInput || _midiInput.key !== lkey) { try { mi.close({ requester: _MIDI_REQUESTER, logicalSourceKey: lkey }); } catch (_) { /* best-effort */ } }
                         return;
                     }
+                    // SPEC-004b: a destroy or deviceEnabled:false while we
+                    // awaited open must not install a live handle.
+                    if (!_inputSettings.deviceEnabled || _instances.size === 0) {
+                        try { mi.close({ requester: _MIDI_REQUESTER, logicalSourceKey: lkey }); } catch (_) { /* best-effort */ }
+                        if (myGen === _midiConnectSeq) {
+                            _midiHandle = null;
+                            _midiListener = null;
+                            _midiInput = null;
+                        }
+                        return;
+                    }
                     if (res && res.handle) {
                         _midiHandle = res.handle;
                         // The domain handle delivers raw MIDI data; adapt to the
@@ -823,11 +860,16 @@
         const data = e.data;
         if (!data || data.length < 3) return;
         const type = data[0] & 0xf0;
+        const ch = data[0] & 0x0f;
         const note = data[1];
         const vel = data[2];
         // 0x90 = note-on. note-on with velocity 0 is a note-off (running
         // status); skip those too.
         if (type !== 0x90 || vel === 0) return;
+        // SPEC-004b: match 2D — filter by midiChannel before Learn or scoring.
+        // -1 = all channels.
+        const wantCh = _inputSettings.midiChannel;
+        if (wantCh >= 0 && ch !== wantCh) return;
         // Learn intercept (INIT-002/SPEC-004): a pending Learn from 3D
         // settings consumes the next note-on via PUT and does not score.
         if (_learnPiece && _confirmedKitId) {
@@ -932,9 +974,10 @@
      * (GR-002) and never POSTs active_kit except from the explicit
      * "Use this kit" confirm (GR-003).
      *
-     * Shared device/channel/hits/volume consumption is SPEC-004b — this
-     * block only subscribes to mapping-change records (empty changedKeys
-     * plus mutation/kitId) so 3D hit resolution stays live.
+     * Shared device/channel/hits/volume consumption is SPEC-004b: the
+     * same subscribe owner (`_onDrumInputChange`) handles settings
+     * records (`changedKeys`) and mapping records (empty changedKeys
+     * plus mutation/kitId). Do not add a second subscribe().
      */
     const PIECE_FRIENDLY = {
         kick: 'Kick',
@@ -964,6 +1007,22 @@
     let _mappingFetchImpl = null;
     let _notifiedMapping = []; // test probe; capped
 
+    // INIT-002/SPEC-004b: shared device/channel/hits/volume. Same
+    // subscribe owner as mapping (`_onDrumInputChange`); do not add a
+    // second drumInput.subscribe().
+    const INPUT_FIELDS = ['deviceEnabled', 'midiChannel', 'hitDetection', 'synthVolume'];
+    let _inputSettings = {
+        deviceEnabled: false,
+        midiChannel: -1,
+        hitDetection: false,
+        synthVolume: 0.7,
+    };
+    let _lastSettingsRevision = null;
+    let _lastLocalSettingsRevision = null;
+    let _applyingLocalSettings = false;
+    let _savedPickMem = null;
+    let _seededLocalVolume = false;
+
     function _beginKitOp() { return ++_kitOpGen; }
     function _isCurrentKitOp(gen) { return gen === _kitOpGen; }
 
@@ -976,6 +1035,132 @@
     function _drumInput() {
         const d = window.feedBack && window.feedBack.drumInput;
         return (d && d.version === 1) ? d : null;
+    }
+
+    function _notifyInputUi() {
+        try { window.dispatchEvent(new CustomEvent('drum_h3d:input')); } catch (_) {}
+    }
+
+    function _clampInputChannel(value) {
+        if (value == null || value === '') return -1;
+        const n = Math.round(Number(value));
+        if (!Number.isFinite(n)) return -1;
+        if (n < -1) return -1;
+        if (n > 15) return 15;
+        return n;
+    }
+
+    function _clampInputVolume(value) {
+        const n = Number(value);
+        if (!Number.isFinite(n)) return 0.7;
+        if (n < 0) return 0;
+        if (n > 1) return 1;
+        return n;
+    }
+
+    function _revisionsEqual(a, b) {
+        if (!a || !b) return false;
+        return a.clock === b.clock && a.origin === b.origin && a.sequence === b.sequence;
+    }
+
+    function _legacyVolumeFromStore() {
+        const raw = _readStore(LS_SYNTH_VOL);
+        const parsed = raw === null ? NaN : parseFloat(raw);
+        if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) return parsed;
+        return null;
+    }
+
+    function _applySettingsState(state, changedKeys) {
+        if (!state || typeof state !== 'object') return;
+        const keys = (changedKeys && changedKeys.length) ? changedKeys : INPUT_FIELDS;
+        let deviceTouched = false;
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            if (key === 'midiChannel' && state.midiChannel !== undefined) {
+                _inputSettings.midiChannel = _clampInputChannel(state.midiChannel);
+            } else if (key === 'hitDetection' && (state.hitDetection === true || state.hitDetection === false)) {
+                const next = state.hitDetection;
+                if (next && !_inputSettings.hitDetection) _midiJustConnected = true;
+                _inputSettings.hitDetection = next;
+            } else if (key === 'synthVolume' && state.synthVolume != null) {
+                _synthSetVolume(state.synthVolume, { fromContract: true });
+                _inputSettings.synthVolume = _synthVolume;
+            } else if (key === 'deviceEnabled' && (state.deviceEnabled === true || state.deviceEnabled === false)) {
+                if (_inputSettings.deviceEnabled !== state.deviceEnabled) deviceTouched = true;
+                _inputSettings.deviceEnabled = state.deviceEnabled;
+            }
+        }
+        if (deviceTouched) {
+            if (_inputSettings.deviceEnabled) _midiAutoConnect();
+            else _midiDetach();
+        }
+        _notifyInputUi();
+    }
+
+    function _writeSharedSettings(partial) {
+        if (!partial || typeof partial !== 'object') return;
+        _applySettingsState(partial, Object.keys(partial));
+        const di = _drumInput();
+        if (!di || typeof di.update !== 'function') {
+            _persistPickRecord();
+            if (partial.synthVolume != null) _writeStore(LS_SYNTH_VOL, String(_inputSettings.synthVolume));
+            return;
+        }
+        _applyingLocalSettings = true;
+        try {
+            const next = di.update(partial);
+            if (next && next.revision) {
+                _lastLocalSettingsRevision = next.revision;
+                _lastSettingsRevision = next.revision;
+            }
+        } finally {
+            _applyingLocalSettings = false;
+        }
+        // SPEC-002 dual-writes a settings-only snapshot onto pick_v2;
+        // restore identity so a later reload does not look like None.
+        _persistPickRecord();
+    }
+
+    function _hydrateSharedInputSettings() {
+        // Read 3D-only volume before applying the contract — apply()
+        // mirrors synthVolume onto drum_h3d_synth_vol and would otherwise
+        // erase the legacy value we need to seed (INIT-002/SPEC-004b).
+        const localVol = _legacyVolumeFromStore();
+        const di = _drumInput();
+        const state = di && typeof di.get === 'function' ? di.get() : null;
+        if (state) {
+            _applySettingsState(state, INPUT_FIELDS);
+            if (state.revision) _lastSettingsRevision = state.revision;
+            if (!_seededLocalVolume && localVol != null && localVol !== state.synthVolume && state.synthVolume === 0.7) {
+                _seededLocalVolume = true;
+                _writeSharedSettings({ synthVolume: localVol });
+            } else {
+                _seededLocalVolume = true;
+            }
+        } else {
+            if (localVol != null) {
+                _inputSettings.synthVolume = localVol;
+                _synthSetVolume(localVol, { fromContract: true });
+            }
+            const saved = _readSavedPick();
+            if (saved && (saved.id || saved.name || saved.key)) _inputSettings.deviceEnabled = true;
+        }
+        if (!_savedPickMem) {
+            const saved = _readSavedPick();
+            if (saved) _savedPickMem = { id: saved.id || '', name: saved.name || '', key: saved.key || '' };
+        }
+    }
+
+    function _onSharedSettingsChange(detail, changed) {
+        if (_applyingLocalSettings) return;
+        if (_revisionsEqual(detail.revision, _lastLocalSettingsRevision)) return;
+        if (!_mappingRevNewer(detail.revision, _lastSettingsRevision)) return;
+        if (detail.revision) _lastSettingsRevision = detail.revision;
+        const di = _drumInput();
+        const state = di && typeof di.get === 'function' ? di.get() : null;
+        _applySettingsState(state || {}, changed);
+        // Incoming contract records refresh the renderer only — never update()
+        // (REQ-005 / REQ-002: no echoed notification).
     }
 
     function _setMappingStatus(message, kind) {
@@ -1065,6 +1250,12 @@
     function _onDrumInputChange(detail) {
         if (!detail || detail.version !== 1) return;
         const changed = Array.isArray(detail.changedKeys) ? detail.changedKeys : [];
+        // Settings records carry changedKeys; mapping records do not
+        // (INIT-002/SPEC-004). One owner handles both.
+        if (changed.length > 0) {
+            _onSharedSettingsChange(detail, changed);
+            return;
+        }
         const isMapping = detail.mutation === 'set' || detail.mutation === 'delete'
             || (detail.kitId && changed.length === 0);
         if (!isMapping) return;
@@ -1075,7 +1266,10 @@
     }
 
     function _ensureMappingListeners() {
-        if (_mappingUnsub) return;
+        if (_mappingUnsub) {
+            _hydrateSharedInputSettings();
+            return;
+        }
         const di = _drumInput();
         if (di && typeof di.subscribe === 'function') {
             _mappingUnsub = di.subscribe(_onDrumInputChange);
@@ -1083,6 +1277,7 @@
             _mappingUnsub = function noopUnsub() {};
         }
         _mappingListenerCount += 1;
+        _hydrateSharedInputSettings();
     }
 
     function _releaseMappingListeners() {
@@ -1355,6 +1550,7 @@
         // MIDI devices without having to load a song first. Fires the
         // browser permission prompt the first time; idempotent after.
         // Returns a promise that resolves when _midiInit settles.
+        _ensureMappingListeners();
         return _midiInit();
     };
     window.drumH3dListMidiInputs = function () {
@@ -1371,25 +1567,43 @@
         // id via _midiConnect so a future page reload still finds the
         // device after Chrome regenerates ids.
         // `id` may be a logicalSourceKey (new host calls) or a legacy sourceId.
+        // SPEC-004b: None writes deviceEnabled:false through the core
+        // contract; selecting a source enables it. Set the flag before
+        // connect so apply() does not auto-connect a fallback.
         const src = id
             ? (_midiSources().find(s => s.key === id) || _midiSources().find(s => s.id === id))
             : null;
-        _midiConnect(src ? src.id : (id || ''), src ? src.name : '', src ? src.key : '');
-        return true;
+        const enabled = !!(src || (typeof id === 'string' && id !== ''));
+        _inputSettings.deviceEnabled = enabled;
+        const connecting = _midiConnect(src ? src.id : (id || ''), src ? src.name : '', src ? src.key : '');
+        _writeSharedSettings({ deviceEnabled: enabled });
+        return connecting;
     };
     window.drumH3dGetSynthVolume = function () {
-        // When the synth has not initialised yet (viz never ran, settings
-        // opened first), read from localStorage so the settings slider shows
-        // the persisted value rather than the default 0.70.
-        if (!_synthPlayer) {
-            const raw = _readStore(LS_SYNTH_VOL);
-            const parsed = raw === null ? NaN : parseFloat(raw);
-            if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) return parsed;
-        }
-        return _synthVolume;
+        return _inputSettings.synthVolume;
     };
     window.drumH3dSetSynthVolume = function (v) {
-        _synthSetVolume(v);
+        _writeSharedSettings({ synthVolume: _clampInputVolume(v) });
+    };
+    window.drumH3dGetMidiChannel = function () {
+        return _inputSettings.midiChannel;
+    };
+    window.drumH3dSetMidiChannel = function (ch) {
+        _writeSharedSettings({ midiChannel: _clampInputChannel(ch) });
+    };
+    window.drumH3dGetHitDetection = function () {
+        return _inputSettings.hitDetection;
+    };
+    window.drumH3dSetHitDetection = function (on) {
+        _writeSharedSettings({ hitDetection: !!on });
+    };
+    window.drumH3dGetInputSettings = function () {
+        return {
+            deviceEnabled: _inputSettings.deviceEnabled,
+            midiChannel: _inputSettings.midiChannel,
+            hitDetection: _inputSettings.hitDetection,
+            synthVolume: _inputSettings.synthVolume,
+        };
     };
 
     /* ======================================================================
@@ -1464,6 +1678,7 @@
             const raw = _readStore(LS_SYNTH_VOL);
             const parsed = raw === null ? NaN : parseFloat(raw);
             if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) _synthVolume = parsed;
+            if (typeof _inputSettings.synthVolume === 'number') _synthVolume = _inputSettings.synthVolume;
             if (!_playerScriptLoaded) {
                 await _loadScript(WAF_PLAYER_URL);
                 _playerScriptLoaded = true;
@@ -1533,11 +1748,14 @@
         _synthPlayer.queueWaveTable(_audioCtx, _synthGain, preset, 0, midiNote, 0.5, vol);
     }
 
-    function _synthSetVolume(v) {
+    function _synthSetVolume(v, opts) {
         const c = Math.max(0, Math.min(1, Number(v) || 0));
         _synthVolume = c;
+        _inputSettings.synthVolume = c;
         if (_synthGain) _synthGain.gain.value = c;
         _writeStore(LS_SYNTH_VOL, String(c));
+        if (opts && opts.fromContract) return;
+        _writeSharedSettings({ synthVolume: c });
     }
 
     /* ======================================================================
@@ -2439,6 +2657,14 @@
                 // Free-play (no chart loaded): no scoring, but still give
                 // the pad strike its lane flash + sparks so drumming along
                 // to the demo pattern feels alive.
+                _laneFlashes.push({ lane, wall: performance.now(), kind: 'hit' });
+                _spawnHitFx(lane, null, false);
+                return;
+            }
+
+            // SPEC-004b: hitDetection gates scoring only — synth + flashes
+            // keep running so toggling Hits does not disconnect the device.
+            if (!_inputSettings.hitDetection) {
                 _laneFlashes.push({ lane, wall: performance.now(), kind: 'hit' });
                 _spawnHitFx(lane, null, false);
                 return;
@@ -3613,7 +3839,7 @@
                 // mi.open() may still be pending (slow / permission prompt), during
                 // which no events can arrive — counting passes then would bank false
                 // misses. _midiHandle is truthy only after a handle is opened+wired.
-                if (_midiHandle) {
+                if (_midiHandle && _inputSettings.hitDetection) {
                     if (_midiJustConnected) {
                         _midiJustConnected = false;
                         _resetScoring();
@@ -4048,10 +4274,12 @@
                     if (_instances.size > 1 || _ssActive()) {
                         applySize(highwayCanvas.clientWidth, highwayCanvas.clientHeight);
                     }
+                    // Hydrate shared settings (and subscribe) before MIDI
+                    // init so auto-connect honors deviceEnabled (SPEC-004b).
+                    _ensureMappingListeners();
                     _midiInit();
                     _synthInit();
                     _midiResume();
-                    _ensureMappingListeners();
                     _hydrateActiveKit();
 
                     _injectHud();
@@ -4299,6 +4527,39 @@
         get _mappingListenerCount() { return _mappingListenerCount; },
         get _mappingUnsub() { return _mappingUnsub; },
         get _notifiedMapping() { return _notifiedMapping.slice(); },
+        get _inputSettings() { return Object.assign({}, _inputSettings); },
+        get _lastSettingsRevision() { return _lastSettingsRevision; },
+        get _midiConnectSeq() { return _midiConnectSeq; },
+        get _midiActive() { return _midiActive; },
+        get _midiHandle() { return _midiHandle; },
+        get _midiInput() { return _midiInput; },
+        get _midiListener() { return _midiListener; },
+        get _synthVolume() { return _synthVolume; },
+        get _instancesSize() { return _instances.size; },
+        _midiConnect,
+        _midiDetach,
+        _midiReleaseSession,
+        _midiResume,
+        _midiAutoConnect,
+        _hydrateSharedInputSettings,
+        _writeSharedSettings,
+        _applySettingsState,
+        _readSavedPick,
+        _writeSavedPick,
+        _setActiveInstance(inst) { _activeInstance = inst || null; },
+        _addTestInstance() {
+            const dummy = { _handleDrumHit() {} };
+            _instances.add(dummy);
+            return dummy;
+        },
+        _removeTestInstance(dummy) {
+            _instances.delete(dummy);
+            if (_activeInstance === dummy) _activeInstance = null;
+        },
+        _setMidiInputImpl(mi) {
+            window.slopsmith = window.slopsmith || {};
+            window.slopsmith.midiInput = mi;
+        },
         _setMappingFetch(fn) { _mappingFetchImpl = fn || null; },
         _resetMappingState() {
             _coreKitList = [];
@@ -4311,6 +4572,16 @@
             _mappingStatus = { message: '', kind: '' };
             _lastMappingRevision = null;
             _notifiedMapping = [];
+            _lastSettingsRevision = null;
+            _lastLocalSettingsRevision = null;
+            _applyingLocalSettings = false;
+            _seededLocalVolume = false;
+            _inputSettings = {
+                deviceEnabled: false,
+                midiChannel: -1,
+                hitDetection: false,
+                synthVolume: 0.7,
+            };
             _applyActiveKitNotes(null);
         },
     };

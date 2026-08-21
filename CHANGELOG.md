@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back to both during the compatibility window. Device identity stays owned
   by `feedBack.midiInput`; kit-note mappings stay owned by the atomic kit
   API above — this contract only re-broadcasts mapping-change notifications.
+- **3D drum highway consumes shared MIDI settings (#127, INIT-002/SPEC-004b).**
+  The 3D highway reads MIDI source enablement, channel, hit detection, and
+  synth volume from `window.feedBack.drumInput`. Source None disconnects and
+  stays disabled; channel/hits/volume apply live in both directions without
+  echoing. Device identity keys (`drum_h3d_midi_pick_v2`,
+  `drum_h3d_midi_input`) and kit mapping UI are unchanged.
 - **3D drum highway kit mapping editor (#127, INIT-002/SPEC-004).** The 3D
   settings panel lists core kits, requires an explicit **Use this kit**
   confirmation before Learn/edit/remove, and shows custom (removable),
