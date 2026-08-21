@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 
 import appstate
-from drums import PIECES, PRESETS, SHIPPED_KITS_DIR, load_kit_file, load_kits
+from drums import PIECES, PRESETS, SHIPPED_KITS_DIR, load_kit_file, load_kits, midi_to_piece
 from safepath import safe_join
 
 log = logging.getLogger("feedBack.server")
@@ -29,6 +29,10 @@ _KIT_ID_RE = re.compile(r"^[a-z0-9-]+$")
 _KIT_BODY_MAX = 64 * 1024
 _DANGEROUS_KEYS = frozenset({"__proto__", "constructor", "prototype"})
 _kit_lock = threading.Lock()
+
+# INIT-002/SPEC-001: atomic per-note mutation body is just {"piece_id": "..."},
+# so it gets a much smaller cap than a whole-kit document.
+_NOTE_BODY_MAX = 4 * 1024
 
 
 def _user_kits_dir() -> Path:
@@ -171,6 +175,128 @@ def get_kit(kit_id: str):
     if kit is None:
         raise HTTPException(status_code=404, detail="unknown kit")
     return _kit_public(kit, _source_for(kit_id, _user_kit_ids()))
+
+
+def _require_midi_note(raw: str) -> int:
+    try:
+        note = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="midi_note must be an integer 0-127") from None
+    if not 0 <= note <= 127:
+        raise HTTPException(status_code=400, detail="midi_note must be an integer 0-127")
+    return note
+
+
+def _require_piece_id_body(body: bytes) -> str:
+    """Validate the `{"piece_id": "..."}` body for an atomic note mutation."""
+    if len(body) > _NOTE_BODY_MAX:
+        raise HTTPException(status_code=413, detail="request body too large")
+    try:
+        obj = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="request body must be JSON") from None
+    if not isinstance(obj, dict):
+        raise HTTPException(status_code=400, detail="request body must be an object")
+    if _has_dangerous_keys(obj):
+        raise HTTPException(status_code=400, detail="request body contains reserved keys")
+    piece_id = obj.get("piece_id")
+    if not isinstance(piece_id, str) or piece_id not in PIECES:
+        raise HTTPException(status_code=400, detail="piece_id must be a known drum piece id")
+    return piece_id
+
+
+def _clone_kit_for_mutation(kit_id: str) -> dict:
+    """Load the kit's current effective (user-overlaid) shape for mutation.
+
+    Callers must hold ``_kit_lock`` — the clone-then-write must be atomic with
+    respect to other note mutations, or a concurrent PUT on a different note
+    could lose this one (REQ-002).
+    """
+    kit = _loaded_kits().get(kit_id)
+    if kit is None:
+        raise HTTPException(status_code=404, detail="unknown kit")
+    out = {
+        "id": kit_id,
+        "name": kit.get("name") or kit_id,
+        "verified": bool(kit.get("verified")),
+        "notes": dict(kit.get("notes") or {}),
+        "hihat": kit.get("hihat"),
+    }
+    manufacturer = kit.get("manufacturer")
+    if isinstance(manufacturer, str) and manufacturer:
+        out["manufacturer"] = manufacturer
+    return out
+
+
+def _mutate_kit_note(kit_id: str, dest: Path, note: int, piece_id: str | None) -> dict:
+    """Load, clone-if-needed, mutate one note, validate, and atomically write.
+
+    The entire load → clone → mutate → validate → write sequence runs under
+    ``_kit_lock`` so a concurrent mutation of a different note on the same
+    kit can never observe or persist a stale snapshot (REQ-002). ``piece_id
+    None`` removes the note (DELETE); otherwise it is set (PUT).
+    """
+    with _kit_lock:
+        cloned = _clone_kit_for_mutation(kit_id)
+        if piece_id is None:
+            cloned["notes"].pop(note, None)
+        else:
+            cloned["notes"][note] = piece_id
+        payload = json.dumps(_persistable_kit(cloned), indent=2).encode("utf-8")
+        _atomic_write(dest, payload)
+    parsed = load_kit_file(payload)
+    if parsed is None:
+        # Unreachable in practice — _persistable_kit's output always
+        # round-trips through load_kit_file — but never respond with a
+        # dict that wasn't actually validated by re-parsing what was written.
+        raise HTTPException(status_code=500, detail="could not persist kit note")
+    return parsed
+
+
+@router.put("/api/drums/kits/{kit_id:path}/notes/{midi_note}")
+async def put_kit_note(kit_id: str, midi_note: str, request: Request):
+    """Atomically set one MIDI-note-to-piece mapping in a kit's user overlay.
+
+    Never touches the shipped kit tree: a shipped kit's current persisted
+    shape is cloned into the user overlay on first mutation (REQ-001).
+    """
+    kit_id = _require_kit_id(kit_id)
+    note = _require_midi_note(midi_note)
+    dest = _user_kit_path(kit_id)
+    if dest is None:
+        raise HTTPException(status_code=400, detail="kit id rejected by path containment")
+    body = await request.body()
+    piece_id = _require_piece_id_body(body)
+    parsed = _mutate_kit_note(kit_id, dest, note, piece_id)
+    log.info("drums kit note set: kit=%s note=%s piece=%s", kit_id, note, piece_id)
+    return {
+        "kit": _kit_public(parsed, "user"),
+        "mutation": {"midi_note": note, "operation": "set", "piece_id": piece_id},
+        "resolution": {"piece_id": piece_id, "source": "kit"},
+    }
+
+
+@router.delete("/api/drums/kits/{kit_id:path}/notes/{midi_note}")
+def delete_kit_note(kit_id: str, midi_note: str):
+    """Atomically remove one MIDI-note-to-piece mapping from a kit's user
+    overlay. Idempotent — deleting an already-absent note still succeeds and
+    reports the same resolution (REQ-004)."""
+    kit_id = _require_kit_id(kit_id)
+    note = _require_midi_note(midi_note)
+    dest = _user_kit_path(kit_id)
+    if dest is None:
+        raise HTTPException(status_code=400, detail="kit id rejected by path containment")
+    parsed = _mutate_kit_note(kit_id, dest, note, None)
+    gm_fallback = midi_to_piece(note)
+    log.info("drums kit note removed: kit=%s note=%s", kit_id, note)
+    return {
+        "kit": _kit_public(parsed, "user"),
+        "mutation": {"midi_note": note, "operation": "delete", "piece_id": None},
+        "resolution": {
+            "piece_id": gm_fallback,
+            "source": "gm" if gm_fallback else "unmapped",
+        },
+    }
 
 
 def validate_kit_bytes(body: bytes, kit_id: str | None = None) -> tuple[bytes | None, str | None, int]:
