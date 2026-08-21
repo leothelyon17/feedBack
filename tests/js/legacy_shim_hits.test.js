@@ -129,8 +129,8 @@ test('library providers route through native library capability', () => {
 test('visualization renderer installs preserve plugin attribution', () => {
     const src = source(VIZ_JS);
     const tagger = region(src, 'function _tagVizRenderer(renderer, id)', 700);
-    const setViz = region(src, 'function setViz(id)', 3600);
-    const autoViz = region(src, 'function _autoMatchViz()', 5200);
+    const setViz = region(src, 'function setViz(id)', 4800);
+    const autoViz = region(src, 'function _autoMatchViz()', 7800);
 
     assert.match(tagger, /renderer\.pluginId\s*=\s*id/);
     assert.match(tagger, /renderer\.source\s*=\s*id/);

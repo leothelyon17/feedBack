@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Auto mode prefers the 3D drum highway (#127, INIT-002/SPEC-005).** For a
+  drum arrangement, Auto selects `drum_highway_3d` when the plugin is
+  registered and WebGL2 is available, falls back to the 2D drum highway
+  when 3D is missing or unsupported, and never replaces an explicit
+  visualization picker choice. Core-local fake 2D/3D consumers cover
+  mapping/settings round trips, API failure, stale events, and switch-cycle
+  listener counts against the version-1 drum-input contract.
 - **Atomic per-note drum kit mutations (#127).** `PUT`/`DELETE
   /api/drums/kits/{kit_id}/notes/{midi_note}` set or remove a single
   MIDI-note-to-piece mapping under the existing kit lock (load → clone
