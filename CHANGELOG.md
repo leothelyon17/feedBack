@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back to both during the compatibility window. Device identity stays owned
   by `feedBack.midiInput`; kit-note mappings stay owned by the atomic kit
   API above — this contract only re-broadcasts mapping-change notifications.
+- **3D drum highway kit mapping editor (#127, INIT-002/SPEC-004).** The 3D
+  settings panel lists core kits, requires an explicit **Use this kit**
+  confirmation before Learn/edit/remove, and shows custom (removable),
+  GM-default, and Unmapped provenance. Mapping mutations use the atomic
+  per-note API and `notifyMappingChange`; `drum_h3d_kit_v1` stays visual
+  lane layout only. Shared device/channel/hits/volume consumption is
+  deferred to SPEC-004b.
 - **Main instrument setting gates tuner chrome (#127).** Additive `player_instrument` in Settings (explicit Not set). When the value is `drums`, the tuner badge, onboarding tour `tuner` step, and remaining auto-mic path are suppressed; Settings and Pedalboard stay reachable. Changing away from drums restores those surfaces without a page reload.
 - **Drum kit HTTP surface and player instrument setting (#127).** `/api/drums/vocabulary` and kit CRUD persist user kits under `{config_dir}/drums/` with path containment. Additive `player_instrument` and `active_kit` settings do not widen `instrument`.
 - **3D drum highway vocabulary consume.** The bundled 3D highway overlays core piece-ids and `active_kit` when the API is available, and keeps local `MIDI_TO_PIECE` / `drum_h3d_kit_v1` as fallbacks.
