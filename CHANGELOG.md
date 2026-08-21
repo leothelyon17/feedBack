@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   highways can edit one note without racing a whole-kit read/modify/write.
   DELETE reports the GM fallback (or `unmapped`) provenance and is
   idempotent. Never writes to the shipped kit tree.
+- **Shared drum MIDI-input/settings contract (#127).** A new core capability
+  (`static/capabilities/drum-input.js`, `window.feedBack.drumInput`) is the
+  single versioned source of truth for MIDI device enablement, channel, hit
+  detection, and synth volume shared by the 2D and 3D drum highways.
+  Persists to `feedback_drums_input_v1` with a deterministic
+  `(clock, origin, sequence)` last-write-wins revision; same-tab consumers
+  get a live `feedback:drum-input-change` event, cross-tab consumers get it
+  via the canonical key's `storage` event. Migrates missing fields from the
+  2D plugin's existing keys and the 3D highway's, with bounded dual writes
+  back to both during the compatibility window. Device identity stays owned
+  by `feedBack.midiInput`; kit-note mappings stay owned by the atomic kit
+  API above — this contract only re-broadcasts mapping-change notifications.
 - **Main instrument setting gates tuner chrome (#127).** Additive `player_instrument` in Settings (explicit Not set). When the value is `drums`, the tuner badge, onboarding tour `tuner` step, and remaining auto-mic path are suppressed; Settings and Pedalboard stay reachable. Changing away from drums restores those surfaces without a page reload.
 - **Drum kit HTTP surface and player instrument setting (#127).** `/api/drums/vocabulary` and kit CRUD persist user kits under `{config_dir}/drums/` with path containment. Additive `player_instrument` and `active_kit` settings do not widen `instrument`.
 - **3D drum highway vocabulary consume.** The bundled 3D highway overlays core piece-ids and `active_kit` when the API is available, and keeps local `MIDI_TO_PIECE` / `drum_h3d_kit_v1` as fallbacks.
