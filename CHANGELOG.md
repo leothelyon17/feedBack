@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Drum profile accessor (INIT-003/SPEC-004).** `window.feedBack.drumProfiles`
+  (`static/capabilities/drum-profiles.js`) is the only in-page writer against
+  `/api/drums/profiles`. `list` / `get` / `save` / `activate` consume the
+  SPEC-002 HTTP surface; activate POSTs `active_drum_profile` and dispatches
+  `feedback:drum-profile-change` (`profile_id`, `kit_id`) on the existing
+  feedBack bus. `save` rejects a `notes` field and never PUTs one.
+  `feedBack.drumInput` persists play-critical `input` / `device` fields
+  through the active profile once one exists; legacy `feedback_drums_input_v1`
+  and 2D/3D keys stay dual-read until then. Device `source_id` must be a
+  logical midi-input id.
 - **Drums Settings tab host stub (INIT-003/SPEC-003).** Settings gains a
   Drums tab after System with mount `#plugin-settings-drums`. The tab is
   hidden unless an installed plugin declared `settings.category: "drums"`.

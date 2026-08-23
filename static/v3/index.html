@@ -141,6 +141,9 @@
          with the other domain-adjacent capabilities above, though it does
          not itself call into midi-input.js (device identity stays there). -->
     <script type="module" src="/static/capabilities/drum-input.js"></script>
+    <!-- INIT-003/SPEC-004: only in-page writer against /api/drums/profiles.
+         Loaded after drum-input.js so hydrate can applyFromProfile. -->
+    <script type="module" src="/static/capabilities/drum-profiles.js"></script>
     <script type="module" src="/static/capabilities/interface-scale.js"></script>
 </head>
 <body class="h-screen flex overflow-hidden bg-fb-sidebar text-fb-text font-display">

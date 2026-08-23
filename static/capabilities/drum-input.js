@@ -16,13 +16,14 @@
 //     kit API). `notifyMappingChange()` only re-broadcasts that a mapping
 //     changed elsewhere so both highways can refetch — it persists nothing.
 //
-// Persistence: one canonical JSON record at `feedback_drums_input_v1`,
-// carrying a deterministic `(clock, origin, sequence)` revision tuple for
-// last-write-wins ordering across tabs. Same-tab changes additionally fan
-// out through `window.feedBack`'s `feedback:drum-input-change` event;
-// cross-tab changes arrive via the browser's `storage` event on the same
-// canonical key. Both paths converge on the same `_applyIncoming` merge so a
-// consumer only ever has to hold one code path.
+// Persistence: when `feedBack.drumProfiles` has an active profile
+// (INIT-003/SPEC-004), play-critical fields write through that accessor
+// onto the profile's `input` / `device` — not a parallel localStorage key.
+// Until an active profile exists, the canonical JSON record at
+// `feedback_drums_input_v1` remains the persist path (legacy dual-read).
+// Same-tab changes additionally fan out through `window.feedBack`'s
+// `feedback:drum-input-change` event; cross-tab changes arrive via the
+// browser's `storage` event on the canonical key when that path is live.
 //
 // Legacy compatibility (INIT-002/GR-005, bounded to this initiative): reads
 // migrate missing fields from the 2D drum plugin's existing keys
@@ -246,6 +247,21 @@
         return record;
     }
 
+    // One persist path: the active profile when SPEC-004's accessor is
+    // live, otherwise the INIT-002 localStorage record. Never both.
+    function _persistPlayCritical(state, revision) {
+        const dp = window.feedBack && window.feedBack.drumProfiles;
+        if (dp && typeof dp.hasActive === 'function' && dp.hasActive()
+            && typeof dp.writeInputFields === 'function') {
+            try {
+                const pending = dp.writeInputFields(state);
+                if (pending && typeof pending.catch === 'function') pending.catch(function () {});
+            } catch (_) { /* best-effort */ }
+            return null;
+        }
+        return _persistCanonical(state, revision);
+    }
+
     function _loadOrMigrate() {
         const { fields: canonicalFields, revision: canonicalRevision } = _parseCanonical(_readRaw(STORAGE_KEY));
         const allFieldsPresent = FIELDS.every((f) => canonicalFields[f] !== undefined);
@@ -389,7 +405,19 @@
         if (changedKeys.length === 0) return _publicState();
         _current = { ..._current, ...sanitized };
         _revision = _nextRevision(_revision);
-        _persistCanonical(_current, _revision);
+        _persistPlayCritical(_current, _revision);
+        _emitChange({ changedKeys });
+        return _publicState();
+    }
+
+    // Hydrate from the active profile without writing localStorage or
+    // echoing a second persist back through drumProfiles.
+    function applyFromProfile(partial) {
+        const sanitized = _sanitizeUpdate(partial);
+        const changedKeys = Object.keys(sanitized).filter((key) => _current[key] !== sanitized[key]);
+        if (changedKeys.length === 0) return _publicState();
+        _current = { ..._current, ...sanitized };
+        _revision = _nextRevision(_revision);
         _emitChange({ changedKeys });
         return _publicState();
     }
@@ -456,6 +484,7 @@
         EVENT: EVENT_NAME,
         get,
         update,
+        applyFromProfile,
         subscribe,
         unsubscribe,
         notifyMappingChange,
