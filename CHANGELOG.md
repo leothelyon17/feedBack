@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns 400 until another profile is activated (or the pointer is
   cleared). `PUT`/`DELETE` kit-note Learn routes return 409 while any
   highway scoring session is playing or paused (`PUT
-  /api/drums/scoring-session`). Settings import never treats
+  /api/drums/scoring-session`). Whole-kit `PUT`/`DELETE
+  /api/drums/kits/{kit_id}` also return 409 in those states
+  (INIT-003/SPEC-002 SEC-M-03). Settings import never treats
   `drums/profiles/*.json` as kits; export omits profiles whose
   `device.source_id` is not a logical midi-input id.
 - **Named drum profile documents (INIT-003/SPEC-001).** Session documents

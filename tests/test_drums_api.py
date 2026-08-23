@@ -616,3 +616,46 @@ def test_note_mutations_succeed_after_scoring_session_stopped(client, env):
     assert r.status_code == 200, r.text
     d = client.delete("/api/drums/kits/alesis-strata-prime/notes/24")
     assert d.status_code == 200, d.text
+
+
+def test_put_kit_conflicts_while_scoring_session_playing(client, env):
+    """SEC-M-03: whole-kit PUT cannot replace notes while playing."""
+    _srv, tmp = env
+    seed = client.put("/api/drums/kits/my-ekit", json=_user_kit_body())
+    assert seed.status_code == 200, seed.text
+    before = json.loads((tmp / "drums" / "my-ekit.json").read_text())
+
+    lock = client.put("/api/drums/scoring-session", json={"state": "playing"})
+    assert lock.status_code == 200, lock.text
+    assert lock.json()["learn_locked"] is True
+
+    replacement = _user_kit_body()
+    replacement["notes"] = {"60": "ride"}
+    r = client.put("/api/drums/kits/my-ekit", json=replacement)
+    assert r.status_code == 409
+    after = json.loads((tmp / "drums" / "my-ekit.json").read_text())
+    assert after == before
+    got = client.get("/api/drums/kits/my-ekit")
+    assert got.status_code == 200
+    assert got.json()["notes"]["38"] == "snare"
+    assert "60" not in got.json()["notes"]
+
+
+def test_delete_kit_conflicts_while_scoring_session_paused(client, env):
+    """SEC-M-03: whole-kit DELETE cannot remove notes while paused."""
+    _srv, tmp = env
+    seed = client.put("/api/drums/kits/my-ekit", json=_user_kit_body())
+    assert seed.status_code == 200, seed.text
+    before = json.loads((tmp / "drums" / "my-ekit.json").read_text())
+
+    lock = client.put("/api/drums/scoring-session", json={"state": "paused"})
+    assert lock.status_code == 200
+    assert lock.json()["learn_locked"] is True
+
+    r = client.delete("/api/drums/kits/my-ekit")
+    assert r.status_code == 409
+    after = json.loads((tmp / "drums" / "my-ekit.json").read_text())
+    assert after == before
+    got = client.get("/api/drums/kits/my-ekit")
+    assert got.status_code == 200
+    assert got.json()["notes"]["38"] == "snare"

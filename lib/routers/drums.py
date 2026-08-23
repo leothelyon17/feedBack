@@ -45,7 +45,7 @@ _kit_lock = threading.Lock()
 _NOTE_BODY_MAX = 4 * 1024
 
 # INIT-003/SPEC-002: in-process highway scoring-session flag. Learn/note
-# mutations 409 while any session is playing or paused. No WS frame.
+# and whole-kit writes 409 while any session is playing or paused. No WS frame.
 _SCORING_LOCKED = frozenset({"playing", "paused"})
 _SCORING_STATES = frozenset({"playing", "paused", "stopped", "idle"})
 _scoring_lock = threading.Lock()
@@ -400,6 +400,7 @@ async def put_kit(kit_id: str, request: Request):
     dest = _user_kit_path(kit_id)
     if dest is None:
         raise HTTPException(status_code=400, detail="kit id rejected by path containment")
+    _reject_if_learn_locked()
     body = await request.body()
     payload, err, status = validate_kit_bytes(body, kit_id)
     if err is not None or payload is None:
@@ -417,6 +418,7 @@ def delete_kit(kit_id: str):
     dest = _user_kit_path(kit_id)
     if dest is None:
         raise HTTPException(status_code=400, detail="kit id rejected by path containment")
+    _reject_if_learn_locked()
     user_file = dest.is_file()
     shipped = kit_id in load_kits(SHIPPED_KITS_DIR, None)
     if user_file:
