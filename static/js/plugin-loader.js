@@ -97,6 +97,7 @@ async function _registerLegacyPluginUiContributions(plugin) {
 const _PLUGIN_SETTINGS_CONTAINER_IDS = [
     'plugin-settings', 'plugin-settings-graphics',
     'plugin-settings-mic', 'plugin-settings-progression',
+    'plugin-settings-drums', // INIT-003/SPEC-003 host stub
 ];
 function _pluginSettingsContainers() {
     const out = [];
@@ -133,6 +134,14 @@ export async function loadPlugins() {
             const nameDelta = String(a.name || a.id || '').localeCompare(String(b.name || b.id || ''));
             return nameDelta || String(a.id || '').localeCompare(String(b.id || ''));
         });
+        // INIT-003/SPEC-003: drums-specific host hook (not a generic tab
+        // registry). settings.js hides the Drums tab unless a plugin
+        // declared settings.category: "drums".
+        try {
+            if (typeof window.syncDrumsTabVisibility === 'function') {
+                window.syncDrumsTabVisibility(plugins);
+            }
+        } catch (_) { /* settings.js absent / classic v2 page */ }
         // NOTE deliberately NO stale-contribution sweep for plugins absent
         // from this response. Absent ≠ uninstalled: the backend clears its
         // plugin registry at the start of load_plugins() and repopulates it

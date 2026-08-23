@@ -413,6 +413,9 @@
                 <button type="button" class="fb-tab" data-tab="mic">Mic</button>
                 <button type="button" class="fb-tab" data-tab="plugins">Plugins</button>
                 <button type="button" class="fb-tab" data-tab="system">System</button>
+                <!-- INIT-003/SPEC-003: host stub. Hidden unless an installed plugin
+                     declared settings.category: "drums" (settings.js). -->
+                <button type="button" class="fb-tab" data-tab="drums" hidden>Drums</button>
             </div>
 
             <!-- ══ GAMEPLAY ════════════════════════════════════════════════ -->
@@ -938,6 +941,14 @@
                     </div>
                     <div id="settings-status" class="text-sm text-gray-500"></div>
                 </div>
+            </div>
+
+            <!-- ══ DRUMS (INIT-003/SPEC-003 host stub) ══════════════════════ -->
+            <!-- Visible only when a plugin declared settings.category="drums".
+                 Plugin-owned panel HTML is out of scope (SPEC-005 / SPEC-006). -->
+            <div class="fb-tabpanel" data-tab="drums">
+                <div class="fb-tabpanel-head"><h3>Drums Settings</h3></div>
+                <div id="plugin-settings-drums" class="space-y-3"></div>
             </div>
         </div>
     </div>

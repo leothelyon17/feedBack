@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Drums Settings tab host stub (INIT-003/SPEC-003).** Settings gains a
+  Drums tab after System with mount `#plugin-settings-drums`. The tab is
+  hidden unless an installed plugin declared `settings.category: "drums"`.
+  Plugin settings HTML for that category injects into the drums mount, not
+  the Plugins fallback. No generic tab-registration API.
 - **Drum profile HTTP CRUD and Learn lock (INIT-003/SPEC-002).**
   `GET`/`PUT`/`DELETE /api/drums/profiles` and `GET`/`PUT
   /api/drums/profiles/{id}` persist via the SPEC-001 helpers. `kit_id`

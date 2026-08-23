@@ -47,9 +47,44 @@
     function knownTabs() {
         var out = [];
         document.querySelectorAll('#settings-tabbar .fb-tab').forEach(function (b) {
-            if (b.dataset.tab) out.push(b.dataset.tab);
+            // Hidden host stubs (INIT-003/SPEC-003 Drums) are not selectable.
+            if (b.dataset.tab && !b.hidden) out.push(b.dataset.tab);
         });
         return out;
+    }
+
+    // Hide the Drums tab unless any installed plugin declared
+    // settings.category: "drums". Not a generic tab-registration API.
+    function syncDrumsTabVisibility(plugins) {
+        var btn = document.querySelector('#settings-tabbar .fb-tab[data-tab="drums"]');
+        if (!btn) return;
+        var show = false;
+        if (Array.isArray(plugins)) {
+            for (var i = 0; i < plugins.length; i++) {
+                if (plugins[i] && plugins[i].settings_category === 'drums') {
+                    show = true;
+                    break;
+                }
+            }
+        }
+        btn.hidden = !show;
+        if (!show) {
+            var active = document.querySelector('#settings-tabbar .fb-tab.active');
+            if (active && active.dataset.tab === 'drums') {
+                var tabs = knownTabs();
+                activateTab(tabs.length ? tabs[0] : DEFAULT_TAB);
+            }
+        }
+    }
+
+    function requestDrumsTabVisibility(plugins) {
+        if (Array.isArray(plugins)) {
+            syncDrumsTabVisibility(plugins);
+            return;
+        }
+        fetch('/api/plugins').then(function (resp) { return resp.json(); })
+            .then(syncDrumsTabVisibility)
+            .catch(function () { syncDrumsTabVisibility([]); });
     }
 
     function activateTab(tab) {
@@ -70,7 +105,7 @@
         bar.dataset.wired = '1';
         bar.addEventListener('click', function (e) {
             var btn = e.target.closest ? e.target.closest('.fb-tab') : null;
-            if (btn && btn.dataset.tab) activateTab(btn.dataset.tab);
+            if (btn && btn.dataset.tab && !btn.hidden) activateTab(btn.dataset.tab);
         });
         var saved = DEFAULT_TAB;
         try { saved = localStorage.getItem(TAB_KEY) || DEFAULT_TAB; } catch (_) { /* noop */ }
@@ -182,6 +217,7 @@
         wireResets();
         renderKeybinds();
         refreshEmptyStates();
+        requestDrumsTabVisibility();
         // Safety net for plugin-panel injection ordering: tell app.js the
         // settings containers exist now (it injects plugin <details> into the
         // per-category containers). Harmless if no listener is attached.
@@ -196,6 +232,7 @@
                 // Plugin panels (and shortcuts) may have mounted since the last
                 // visit — re-derive the dynamic bits on every Settings entry.
                 wireTabs(); wireResets(); renderKeybinds(); refreshEmptyStates();
+                requestDrumsTabVisibility();
             }
         });
     }
@@ -207,4 +244,8 @@
     } else {
         init();
     }
+
+    // Drums-specific hook for plugin-loader.js (INIT-003/SPEC-003). Not a
+    // generic tab-registration API.
+    window.syncDrumsTabVisibility = requestDrumsTabVisibility;
 })();
