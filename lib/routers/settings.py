@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 import appstate
 import sloppak as sloppak_mod
 from appconfig import _load_config
+from drum_profiles import PROFILE_ID_RE, activate_profile, validate_profile
 from drums import SHIPPED_KITS_DIR, load_kits
 from metadata_db import _as_int, _sqlite_file_integrity_ok
 from tunings import (
@@ -51,13 +52,17 @@ def _known_kit_ids() -> set[str]:
 
 
 def _surface_player_keys(out: dict) -> dict:
-    """Expose player_instrument / active_kit only when set to a valid value."""
+    """Expose player_instrument / active_kit / active_drum_profile when valid."""
     pi = out.get("player_instrument")
     if pi not in _PLAYER_INSTRUMENTS:
         out.pop("player_instrument", None)
     ak = out.get("active_kit")
     if not (isinstance(ak, str) and _KIT_ID_RE.fullmatch(ak)):
         out.pop("active_kit", None)
+    # INIT-003/SPEC-002 — additive, default-unset.
+    adp = out.get("active_drum_profile")
+    if not (isinstance(adp, str) and PROFILE_ID_RE.fullmatch(adp)):
+        out.pop("active_drum_profile", None)
     return out
 
 
@@ -297,6 +302,17 @@ def save_settings(data: dict):
             return _player_error("unknown kit id")
         else:
             updates["active_kit"] = raw
+    # INIT-003/SPEC-002 — additive pointer; setting it dual-writes active_kit.
+    unset_active_drum_profile = False
+    pending_drum_profile = None
+    if "active_drum_profile" in data:
+        raw = data["active_drum_profile"]
+        if raw is None:
+            unset_active_drum_profile = True
+        elif not isinstance(raw, str) or not PROFILE_ID_RE.fullmatch(raw):
+            return _player_error("active_drum_profile must be a known profile id")
+        else:
+            pending_drum_profile = raw
     if "string_count" in data:
         raw = data["string_count"]
         if raw is not None:
@@ -375,6 +391,16 @@ def save_settings(data: dict):
             cfg.pop("player_instrument", None)
         if unset_active_kit:
             cfg.pop("active_kit", None)
+        if unset_active_drum_profile:
+            cfg.pop("active_drum_profile", None)
+        if pending_drum_profile is not None:
+            # Dual-write active_kit = profile.kit_id (INIT-003/SPEC-002).
+            # Wins over a co-submitted active_kit in the same POST.
+            _activated, _aerr = activate_profile(
+                appstate.config_dir, pending_drum_profile, cfg
+            )
+            if _activated is None:
+                return _player_error(_aerr or "unknown profile")
         if _profile_patch is not None:
             # Merge the validated partial over the persisted profiles so a
             # single-profile update leaves the others intact (a fresh config
@@ -419,7 +445,7 @@ _RESETTABLE_SETTINGS_KEYS = frozenset({
     "av_offset_ms", "countdown_before_song", "miss_penalty", "fail_behavior",
     "reference_pitch", "instrument", "string_count", "tuning", "pathway",
     "instrument_profiles", "active_instrument_profile",
-    "player_instrument", "active_kit",
+    "player_instrument", "active_kit", "active_drum_profile",
     "achievements_enabled", "use_amp_sims",
 })
 
@@ -547,6 +573,10 @@ def _validate_server_config_types(cfg: dict) -> str | None:
         v = cfg["active_kit"]
         if v is not None and (not isinstance(v, str) or not _KIT_ID_RE.fullmatch(v)):
             return "server_config.active_kit must be a kit id"
+    if "active_drum_profile" in cfg:
+        v = cfg["active_drum_profile"]
+        if v is not None and (not isinstance(v, str) or not PROFILE_ID_RE.fullmatch(v)):
+            return "server_config.active_drum_profile must be a profile id"
     return None
 
 
@@ -894,6 +924,36 @@ def _sqlite_payload_integrity_ok(payload: bytes) -> bool:
             pass
 
 
+def _is_drum_profile_relpath(relpath: str) -> bool:
+    """True for drums/profiles/*.json — never treat these as kit documents."""
+    if not isinstance(relpath, str):
+        return False
+    norm = relpath.replace("\\", "/").lower()
+    return norm.startswith("drums/profiles/") and norm.endswith(".json")
+
+
+def _sanitize_exported_drum_profiles(files: dict) -> None:
+    """Drop or canonicalize profile files so export never leaks raw port labels.
+
+    INIT-003/SPEC-002 ac-6: device.source_id is a logical midi-input id.
+    """
+    for relpath, entry in list(files.items()):
+        if not _is_drum_profile_relpath(relpath):
+            continue
+        data = None
+        if isinstance(entry, dict) and entry.get("encoding") == "json":
+            data = entry.get("data")
+        if not isinstance(data, dict):
+            files.pop(relpath, None)
+            continue
+        canonical, err = validate_profile(data)
+        if canonical is None:
+            log.warning("settings export: skipped profile %s (%s)", relpath, err)
+            files.pop(relpath, None)
+            continue
+        files[relpath] = {"encoding": "json", "data": canonical}
+
+
 def _core_server_files() -> dict | None:
     """`{relpath: encoded_entry}` for core server-side state in the bundle:
     a snapshot of the library DB plus any custom playlist covers / avatar.
@@ -904,6 +964,7 @@ def _core_server_files() -> dict | None:
     if snap is None:
         return None
     out: dict[str, dict] = dict(_walk_export_paths(list(_CORE_EXPORT_ART_DIRS), appstate.config_dir))
+    _sanitize_exported_drum_profiles(out)
     out[_CORE_LIBRARY_DB] = snap
     return out
 
@@ -1138,7 +1199,24 @@ def import_settings(bundle: dict):
                 {"ok": False, "error": "core_server_files: web_library.db is not a valid SQLite database"},
                 status_code=400,
             )
-        if relpath.startswith("drums/") and relpath.lower().endswith(".json"):
+        if _is_drum_profile_relpath(relpath):
+            # INIT-003/SPEC-002 ac-7: never ingest profiles as kits.
+            stem = Path(relpath).stem
+            try:
+                obj = json.loads(payload)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                return JSONResponse(
+                    {"ok": False, "error": f"core_server_files, file {relpath!r}: profile body must be JSON"},
+                    status_code=400,
+                )
+            canonical, prof_err = validate_profile(obj, stem)
+            if canonical is None:
+                return JSONResponse(
+                    {"ok": False, "error": f"core_server_files, file {relpath!r}: {prof_err}"},
+                    status_code=400,
+                )
+            payload = json.dumps(canonical, indent=2).encode("utf-8")
+        elif relpath.startswith("drums/") and relpath.lower().endswith(".json"):
             from routers.drums import validate_kit_bytes
             stem = Path(relpath).stem
             canonical, kit_err, kit_status = validate_kit_bytes(payload, stem)

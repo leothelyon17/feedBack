@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Drum profile HTTP CRUD and Learn lock (INIT-003/SPEC-002).**
+  `GET`/`PUT`/`DELETE /api/drums/profiles` and `GET`/`PUT
+  /api/drums/profiles/{id}` persist via the SPEC-001 helpers. `kit_id`
+  must name a loaded kit. Profile bodies that include `notes` are
+  rejected. Additive `active_drum_profile` on `/api/settings` dual-writes
+  `active_kit` to that profile's `kit_id`. Deleting the active profile
+  returns 400 until another profile is activated (or the pointer is
+  cleared). `PUT`/`DELETE` kit-note Learn routes return 409 while any
+  highway scoring session is playing or paused (`PUT
+  /api/drums/scoring-session`). Settings import never treats
+  `drums/profiles/*.json` as kits; export omits profiles whose
+  `device.source_id` is not a logical midi-input id.
 - **Named drum profile documents (INIT-003/SPEC-001).** Session documents
   (`id`, `name`, `kit_id`, `device`, `input`, `highway`) persist under
   `{config_dir}/drums/profiles/` so the kit glob cannot ingest them. Helpers
