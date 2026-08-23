@@ -1006,6 +1006,11 @@
     let _lastMappingRevision = null;
     let _mappingFetchImpl = null;
     let _notifiedMapping = []; // test probe; capped
+    // INIT-003/SPEC-006: consume feedBack.drumProfiles (play-critical SoT).
+    let _profileUnsub = null;
+    let _profileList = [];
+    let _selectedProfileId = null;
+    let _profileListenerCount = 0;
 
     // INIT-002/SPEC-004b: shared device/channel/hits/volume. Same
     // subscribe owner as mapping (`_onDrumInputChange`); do not add a
@@ -1035,6 +1040,15 @@
     function _drumInput() {
         const d = window.feedBack && window.feedBack.drumInput;
         return (d && d.version === 1) ? d : null;
+    }
+
+    function _drumProfiles() {
+        const d = window.feedBack && window.feedBack.drumProfiles;
+        return (d && d.version === 1) ? d : null;
+    }
+
+    function _notifyProfilesUi() {
+        try { window.dispatchEvent(new CustomEvent('drum_h3d:profiles')); } catch (_) {}
     }
 
     function _notifyInputUi() {
@@ -1268,6 +1282,7 @@
     function _ensureMappingListeners() {
         if (_mappingUnsub) {
             _hydrateSharedInputSettings();
+            _ensureProfileListeners();
             return;
         }
         const di = _drumInput();
@@ -1278,6 +1293,74 @@
         }
         _mappingListenerCount += 1;
         _hydrateSharedInputSettings();
+        _ensureProfileListeners();
+    }
+
+    // INIT-003/SPEC-006: refetch active_kit.notes when the named profile
+    // changes (parity with 2D). Never PUT notes; kit_id comes from the event.
+    async function _onDrumProfileChange(detail) {
+        const kitId = detail && detail.kit_id ? String(detail.kit_id) : '';
+        if (detail && detail.profile_id) {
+            _selectedProfileId = String(detail.profile_id);
+        }
+        _notifyProfilesUi();
+        if (!kitId) {
+            await _hydrateActiveKit();
+            return;
+        }
+        const gen = _beginKitOp();
+        try {
+            const kR = await _doFetch('/api/drums/kits/' + encodeURIComponent(kitId));
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            if (!kR || !kR.ok) return { ok: false, error: 'refetch failed' };
+            const kit = await kR.json();
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            _selectedKitId = kitId;
+            _applyConfirmedKit(kit, kitId);
+            return { ok: true, kit };
+        } catch (_) {
+            return { ok: false, error: 'network' };
+        }
+    }
+
+    function _ensureProfileListeners() {
+        if (_profileUnsub) return;
+        const dp = _drumProfiles();
+        if (dp && typeof dp.subscribe === 'function') {
+            _profileUnsub = dp.subscribe(_onDrumProfileChange);
+            _profileListenerCount += 1;
+            return;
+        }
+        if (window.feedBack && typeof window.feedBack.on === 'function') {
+            const handler = function (ev) {
+                _onDrumProfileChange(ev && ev.detail);
+            };
+            window.feedBack.on('feedback:drum-profile-change', handler);
+            _profileUnsub = function () {
+                try { window.feedBack.off('feedback:drum-profile-change', handler); } catch (_) {}
+            };
+            _profileListenerCount += 1;
+        }
+    }
+
+    async function _hydrateProfiles() {
+        _ensureProfileListeners();
+        const dp = _drumProfiles();
+        if (!dp || typeof dp.list !== 'function') {
+            _notifyProfilesUi();
+            return { ok: false, missing: true };
+        }
+        try {
+            const list = await dp.list();
+            _profileList = Array.isArray(list) ? list : [];
+            const active = typeof dp.getActive === 'function' ? dp.getActive() : null;
+            if (active && active.id && !_selectedProfileId) _selectedProfileId = String(active.id);
+            _notifyProfilesUi();
+            return { ok: true };
+        } catch (_) {
+            _notifyProfilesUi();
+            return { ok: false, error: 'network' };
+        }
     }
 
     function _releaseMappingListeners() {
@@ -1459,17 +1542,44 @@
             return { ok: false, error: 'no selection' };
         }
         const id = _selectedKitId;
-        const gen = _beginKitOp();
+        let gen = _beginKitOp();
         try {
-            const r = await _doFetch('/api/settings', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ active_kit: id }),
-            });
-            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
-            if (!r || !r.ok) {
-                _setMappingStatus('Could not confirm kit', 'err');
-                return { ok: false, error: 'confirm failed' };
+            // INIT-003/SPEC-006: play-critical kit pointer goes through
+            // drumProfiles when a named profile is active (save kit_id,
+            // never notes). Legacy POST active_kit remains when no profile
+            // exists so older hosts and existing tests keep working.
+            const dp = _drumProfiles();
+            if (dp && typeof dp.hasActive === 'function' && dp.hasActive()
+                && typeof dp.save === 'function' && typeof dp.activate === 'function') {
+                const prev = (typeof dp.getActive === 'function' && dp.getActive()) || {};
+                const profileId = prev.id || (dp.hasActive && _selectedProfileId);
+                if (profileId) {
+                    await dp.save({
+                        id: profileId,
+                        name: prev.name || profileId,
+                        kit_id: id,
+                        highway: prev.highway,
+                        device: prev.device,
+                        input: prev.input,
+                    });
+                    if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+                    await dp.activate(profileId);
+                    // activate emits profile-change, which starts its own
+                    // notes refetch and bumps _kitOpGen. Re-claim so this
+                    // confirm's apply stays current (INIT-003/SPEC-006).
+                    gen = _beginKitOp();
+                }
+            } else {
+                const r = await _doFetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ active_kit: id }),
+                });
+                if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+                if (!r || !r.ok) {
+                    _setMappingStatus('Could not confirm kit', 'err');
+                    return { ok: false, error: 'confirm failed' };
+                }
             }
             const kR = await _doFetch('/api/drums/kits/' + encodeURIComponent(id));
             if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
@@ -1542,6 +1652,84 @@
     };
     window.drumH3dPieceFriendly = function (id) {
         return _pieceFriendly(id);
+    };
+
+    window.drumH3dEnsureProfilesInit = function () {
+        return _hydrateProfiles();
+    };
+    window.drumH3dListProfiles = function () {
+        return _profileList.slice();
+    };
+    window.drumH3dGetProfileStatus = function () {
+        const dp = _drumProfiles();
+        const active = dp && typeof dp.getActive === 'function' ? dp.getActive() : null;
+        const activeId = (active && active.id) || (dp && dp.hasActive && dp.hasActive() ? _selectedProfileId : null);
+        const named = _profileList.find((p) => p && p.id === activeId);
+        return {
+            selectedId: _selectedProfileId,
+            activeId: activeId || '',
+            activeName: (active && active.name) || (named && named.name) || (activeId || ''),
+            profiles: _profileList.slice(),
+        };
+    };
+    window.drumH3dSelectProfile = function (id) {
+        _selectedProfileId = id ? String(id) : null;
+        _notifyProfilesUi();
+        return true;
+    };
+    // Subscribe once the mapping/profile helpers exist so a profile
+    // switch refetches notes even if Settings never opened.
+    try { _ensureProfileListeners(); } catch (_) { /* accessor may load later */ }
+
+    window.drumH3dActivateProfile = async function () {
+        const dp = _drumProfiles();
+        if (!dp || typeof dp.activate !== 'function') {
+            return { ok: false, error: 'no drumProfiles' };
+        }
+        if (!_selectedProfileId) {
+            return { ok: false, error: 'no selection' };
+        }
+        try {
+            const result = await dp.activate(_selectedProfileId);
+            return { ok: true, result };
+        } catch (_) {
+            return { ok: false, error: 'activate failed' };
+        }
+    };
+
+    // Fallback Graphics mount when the loader fragment is absent (tests / late DOM).
+    window.drumH3dEnsureGraphicsSettings = async function (fetchFn) {
+        if (typeof document === 'undefined' || !document.getElementById) {
+            return { ok: false, reason: 'no-document' };
+        }
+        const target = document.getElementById('plugin-settings-graphics');
+        if (!target) return { ok: false, reason: 'no-target' };
+        if (document.getElementById('plugin-settings-drum_highway_3d-graphics')) {
+            return { ok: true, already: true };
+        }
+        const f = fetchFn || (typeof fetch === 'function' ? fetch : null);
+        if (!f) return { ok: false, reason: 'no-fetch' };
+        const r = await f('/api/plugins/drum_highway_3d/assets/settings-graphics.html');
+        if (!r || !r.ok) return { ok: false, reason: 'fetch-failed' };
+        const html = await r.text();
+        const body = document.createElement('div');
+        body.id = 'plugin-settings-drum_highway_3d-graphics';
+        body.dataset.pluginId = 'drum_highway_3d';
+        body.dataset.settingsFragment = 'graphics';
+        body.innerHTML = html;
+        target.appendChild(body);
+        if (body.querySelectorAll) {
+            body.querySelectorAll('script').forEach(function (oldScript) {
+                const newScript = document.createElement('script');
+                for (let i = 0; i < oldScript.attributes.length; i++) {
+                    const attr = oldScript.attributes[i];
+                    newScript.setAttribute(attr.name, attr.value);
+                }
+                newScript.textContent = oldScript.textContent;
+                oldScript.parentNode.replaceChild(newScript, oldScript);
+            });
+        }
+        return { ok: true };
     };
 
     /* ── MIDI device control API (consumed by settings.html) ───── */
@@ -4513,6 +4701,9 @@
         _ensureMappingListeners,
         _releaseMappingListeners,
         _onDrumInputChange,
+        _onDrumProfileChange,
+        _ensureProfileListeners,
+        _hydrateProfiles,
         _refetchConfirmedKit,
         _hydrateActiveKit,
         _gmPieceForNote,
@@ -4526,6 +4717,10 @@
         get _undoRecord() { return _undoRecord; },
         get _mappingListenerCount() { return _mappingListenerCount; },
         get _mappingUnsub() { return _mappingUnsub; },
+        get _profileUnsub() { return _profileUnsub; },
+        get _profileListenerCount() { return _profileListenerCount; },
+        get _selectedProfileId() { return _selectedProfileId; },
+        get _profileList() { return _profileList.slice(); },
         get _notifiedMapping() { return _notifiedMapping.slice(); },
         get _inputSettings() { return Object.assign({}, _inputSettings); },
         get _lastSettingsRevision() { return _lastSettingsRevision; },
@@ -4582,6 +4777,8 @@
                 hitDetection: false,
                 synthVolume: 0.7,
             };
+            _profileList = [];
+            _selectedProfileId = null;
             _applyActiveKitNotes(null);
         },
     };

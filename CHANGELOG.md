@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **3D Drums settings category (INIT-003/SPEC-006).** Bundled `drum_highway_3d`
+  declares `settings.category: "drums"` so a 3D-only install shows the Drums
+  tab. Mapping, kit confirm, MIDI input, and the named profile switcher mount
+  under Settings → Drums. Bloom, camera, theme, and cinematic extras stay on
+  Settings → Graphics via `assets/settings-graphics.html` (existing plugin
+  assets route — no new Python settings schema). Play-critical fields go
+  through `feedBack.drumProfiles`; `drum_h3d_kit_v1` remains a dual-read for
+  visual lane layout only. Subscribing to `feedback:drum-profile-change`
+  refetches `active_kit.notes`.
 - **Drum profile accessor (INIT-003/SPEC-004).** `window.feedBack.drumProfiles`
   (`static/capabilities/drum-profiles.js`) is the only in-page writer against
   `/api/drums/profiles`. `list` / `get` / `save` / `activate` consume the

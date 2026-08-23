@@ -116,6 +116,58 @@ function _pluginSettingsTarget(plugin) {
     return document.getElementById('plugin-settings');
 }
 
+// Revive <script> tags after innerHTML insert (HTML5 leaves them inert).
+function _reviveSettingsScripts(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll('script').forEach((oldScript) => {
+        const newScript = document.createElement('script');
+        for (const attr of oldScript.attributes) {
+            newScript.setAttribute(attr.name, attr.value);
+        }
+        newScript.textContent = oldScript.textContent;
+        oldScript.parentNode.replaceChild(newScript, oldScript);
+    });
+}
+
+// INIT-003/SPEC-006: one-category-per-plugin loader. The 3D highway
+// declares settings.category "drums" so a 3D-only install shows the
+// Drums tab; bloom/camera/theme stay on Graphics via a second HTML
+// fragment fetched from the existing plugin assets route (no Python
+// settings schema). Idempotent — skips when the fragment body exists.
+const _DRUM_H3D_GRAPHICS_ASSET = 'settings-graphics.html';
+async function _injectDrumHighway3dGraphicsFragment(plugin) {
+    if (!plugin || plugin.id !== 'drum_highway_3d') return false;
+    const target = document.getElementById('plugin-settings-graphics');
+    if (!target) return false;
+    const bodyId = 'plugin-settings-drum_highway_3d-graphics';
+    if (document.getElementById(bodyId)) return true;
+    const resp = await fetch(`/api/plugins/${plugin.id}/assets/${_DRUM_H3D_GRAPHICS_ASSET}`);
+    if (!resp.ok) return false;
+    const html = await resp.text();
+    const details = document.createElement('details');
+    details.className = 'bg-dark-700/40 border border-gray-800 rounded-xl overflow-hidden group';
+    details.dataset.pluginId = plugin.id;
+    details.dataset.pluginVersion = plugin.version || '';
+    details.dataset.settingsFragment = 'graphics';
+    const summary = document.createElement('summary');
+    summary.className = 'plugin-settings-summary cursor-pointer select-none px-4 py-3 text-sm font-medium text-gray-300 hover:bg-dark-700/70 transition flex flex-col';
+    const headerRow = document.createElement('span');
+    headerRow.className = 'flex items-center justify-between';
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = (plugin.name || plugin.id) + ' — look';
+    headerRow.appendChild(labelSpan);
+    summary.appendChild(headerRow);
+    details.appendChild(summary);
+    const body = document.createElement('div');
+    body.id = bodyId;
+    body.className = 'px-4 py-4 border-t border-gray-800 space-y-4';
+    body.innerHTML = html;
+    details.appendChild(body);
+    target.appendChild(details);
+    _reviveSettingsScripts(body);
+    return true;
+}
+
 export async function loadPlugins() {
     if (_loadPluginsInFlight) { console.log('[feedBack] loadPlugins: in-flight, skipping'); return null; }
     _loadPluginsInFlight = true;
@@ -637,15 +689,17 @@ export async function loadPlugins() {
                 // elements created via document.createElement DO execute
                 // when appended — so plugins get the script behavior
                 // they'd expect from a normal HTML document.
-                body.querySelectorAll('script').forEach(oldScript => {
-                    const newScript = document.createElement('script');
-                    for (const attr of oldScript.attributes) {
-                        newScript.setAttribute(attr.name, attr.value);
-                    }
-                    newScript.textContent = oldScript.textContent;
-                    oldScript.parentNode.replaceChild(newScript, oldScript);
-                });
+                _reviveSettingsScripts(body);
 
+            }
+
+            // INIT-003/SPEC-006: 3D mapping lives on Drums; FX stay on
+            // Graphics. Inject even when the drums panel was already
+            // hydrated so an upgrade from category=graphics still mounts
+            // the look fragment.
+            if (plugin.id === 'drum_highway_3d') {
+                try { await _injectDrumHighway3dGraphicsFragment(plugin); }
+                catch (_) { /* graphics fragment is optional — drums panel still works */ }
             }
 
             // Load plugin JS

@@ -234,6 +234,18 @@ test('both 2D and 3D declaring drums mount as siblings without crashing', () => 
     assert.equal(drumsBtn.hidden, false);
 });
 
+test('3D-only fixture that declared drums shows the Drums tab (INIT-003/SPEC-006)', () => {
+    const manifest = JSON.parse(fs.readFileSync(
+        path.join(ROOT, 'plugins', 'drum_highway_3d', 'plugin.json'),
+        'utf8',
+    ));
+    assert.equal(manifest.settings.category, 'drums');
+    const { drumsBtn } = runVisibility([
+        { id: 'drum_highway_3d', settings_category: manifest.settings.category },
+    ], { startHidden: true });
+    assert.equal(drumsBtn.hidden, false);
+});
+
 test('no generic runtime tab-registration API is introduced', () => {
     assert.doesNotMatch(LOADER_JS, /registerSettingsTab|addSettingsCategory|registerTab\s*\(/);
     assert.doesNotMatch(SETTINGS_JS, /registerSettingsTab|addSettingsCategory|registerTab\s*\(/);

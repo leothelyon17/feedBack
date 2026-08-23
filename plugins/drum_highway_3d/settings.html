@@ -1,192 +1,35 @@
-<div role="group" aria-labelledby="drumh3d-heading">
+<div role="group" aria-labelledby="drumh3d-heading" data-drumh3d-fragment="drums">
     <h3 id="drumh3d-heading" class="text-sm font-medium text-gray-400 mb-2">3D Drum Highway</h3>
     <p class="text-xs text-gray-500 mb-3">
         Pick a song with a drum tab (sloppak-spec §5.3), choose <em>3D
-        Drum Highway</em> from the viz picker. MIDI kit mapping (which
-        pad hits which piece) is shared with the 2D highway and lives on
-        the core active kit. 3D lane layout below is visual only — order,
-        labels, and chart fallbacks for this highway.
+        Drum Highway</em> from the viz picker. MIDI kit mapping and the
+        drum profile switcher are shared with the 2D highway. Bloom,
+        camera, and theme live on the Graphics tab.
     </p>
 
-    <!-- Palette -->
+    <!-- Drum profile switcher (INIT-003/SPEC-006) -->
     <div class="mt-3">
-        <label for="drumh3d-palette" class="text-xs font-medium text-gray-400 mb-1 block">Palette</label>
-        <select id="drumh3d-palette"
-            onchange="window.drumH3dSetPalette && window.drumH3dSetPalette(this.value); (window._drumH3dRenderPaletteSwatches || function(){})(this.value)"
-            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
-            <option value="default">Default (Classic)</option>
-            <option value="neon">Neon (saturated, electric)</option>
-            <option value="pastel">Pastel (soft, low contrast)</option>
-        </select>
-        <div class="mt-2 flex items-center gap-1" aria-hidden="true">
-            <span id="drumh3d-swatch-0" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
-            <span id="drumh3d-swatch-1" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
-            <span id="drumh3d-swatch-2" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
-            <span id="drumh3d-swatch-3" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
-            <span id="drumh3d-swatch-4" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
-            <span id="drumh3d-swatch-5" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
-            <span id="drumh3d-swatch-6" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
-            <span id="drumh3d-swatch-7" class="inline-block h-6 w-5 rounded border border-gray-700/60"
-                  style="background:#ffa030"></span>
+        <h4 id="drumh3d-profile-heading" class="text-xs font-medium text-gray-300 mb-2">Drum profile</h4>
+        <p class="text-xs text-gray-500 mb-3">
+            Named session (kit + input). Switching a profile refetches
+            that kit's MIDI notes. Two drums panels may both switch the
+            same active profile.
+        </p>
+        <p id="drumh3d-profile-active" class="text-xs text-gray-400 mb-2" aria-live="polite">
+            No profile active.
+        </p>
+        <label for="drumh3d-profile" class="text-xs font-medium text-gray-400 mb-1 block">Profile</label>
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+            <select id="drumh3d-profile"
+                class="flex-1 bg-dark-700 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 outline-none">
+                <option value="">— select a profile —</option>
+            </select>
+            <button type="button" id="drumh3d-use-profile"
+                class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded-lg text-xs"
+                disabled>
+                Use this profile
+            </button>
         </div>
-    </div>
-
-    <!-- Camera angle -->
-    <div class="mt-4">
-        <label for="drumh3d-camera" class="text-xs font-medium text-gray-400 mb-1 block">
-            Camera angle <span id="drumh3d-camera-val" class="text-gray-500 font-mono">0.35</span>
-        </label>
-        <input type="range" id="drumh3d-camera"
-            min="0" max="1" step="0.05" value="0.35"
-            oninput="window.drumH3dSetCameraAngle && window.drumH3dSetCameraAngle(this.value); document.getElementById('drumh3d-camera-val').textContent = parseFloat(this.value).toFixed(2)"
-            class="w-full">
-        <p class="text-xs text-gray-500 mt-1">0 = down the lanes · 1 = top-down</p>
-    </div>
-
-    <!-- Graphics -->
-    <div class="mt-6 border-t border-gray-800 pt-4">
-        <h4 class="text-xs font-medium text-gray-300 mb-2">Graphics</h4>
-
-        <label for="drumh3d-fx-theme" class="text-xs font-medium text-gray-400 mb-1 block">Scene theme</label>
-        <select id="drumh3d-fx-theme"
-            onchange="window.drumH3dSetTheme && window.drumH3dSetTheme(this.value)"
-            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
-            <option value="default">Default (original)</option>
-            <option value="midnight">Midnight</option>
-            <option value="charcoal">Charcoal</option>
-            <option value="deeppurple">Deep Purple</option>
-            <option value="forest">Forest</option>
-            <option value="warmslate">Warm Slate</option>
-            <option value="deepfocus">Deep Focus</option>
-            <option value="deepsea">Deep Sea</option>
-            <option value="cathode">Cathode</option>
-            <option value="cathodegreen">Cathode Green</option>
-            <option value="hearth">Hearth</option>
-        </select>
-        <p class="text-xs text-gray-500 mt-1 mb-3">
-            Background, floor and lane colours — the same theme names as the
-            guitar highway, so your look carries across instruments. Piece
-            colours stay with the Palette above.
-        </p>
-
-        <label for="drumh3d-fx-cinematic" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
-            <input type="checkbox" id="drumh3d-fx-cinematic" checked
-                onchange="window.drumH3dSetFx && window.drumH3dSetFx('cinematic', this.checked)">
-            Cinematic lighting
-        </label>
-        <p class="text-xs text-gray-500 mt-1">
-            Dimmer ambience, stronger key light — more depth on the cymbals
-            and drumheads.
-        </p>
-
-        <label for="drumh3d-fx-glow" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">
-            Glow strength <span id="drumh3d-fx-glow-val" class="text-gray-500 font-mono">0.50</span>
-        </label>
-        <input type="range" id="drumh3d-fx-glow"
-            min="0" max="1" step="0.05" value="0.5"
-            oninput="window.drumH3dSetFx && window.drumH3dSetFx('glow', this.value); document.getElementById('drumh3d-fx-glow-val').textContent = parseFloat(this.value).toFixed(2)"
-            class="w-full">
-        <p class="text-xs text-gray-500 mt-1">
-            How hard the notes and hit line self-illuminate (0.5 = stock).
-            Pairs with bloom.
-        </p>
-
-        <label for="drumh3d-fx-vibrancy" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">
-            Lane vibrancy <span id="drumh3d-fx-vibrancy-val" class="text-gray-500 font-mono">0.85</span>
-        </label>
-        <input type="range" id="drumh3d-fx-vibrancy"
-            min="0" max="1" step="0.05" value="0.85"
-            oninput="window.drumH3dSetFx && window.drumH3dSetFx('vibrancy', this.value); document.getElementById('drumh3d-fx-vibrancy-val').textContent = parseFloat(this.value).toFixed(2)"
-            class="w-full">
-        <p class="text-xs text-gray-500 mt-1">
-            Lane stripe and accent-ring strength — lower for a calmer deck.
-        </p>
-
-        <label for="drumh3d-fx-bgstyle" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">Background ambience</label>
-        <select id="drumh3d-fx-bgstyle"
-            onchange="window.drumH3dSetBgStyle && window.drumH3dSetBgStyle(this.value)"
-            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
-            <option value="off">Off</option>
-            <option value="particles" selected>Particles</option>
-            <option value="lights">Stage lights</option>
-            <option value="geometric">Geometric</option>
-        </select>
-        <label for="drumh3d-fx-bgintensity" class="text-xs font-medium text-gray-400 mb-1 mt-2 block">
-            Ambience intensity <span id="drumh3d-fx-bgintensity-val" class="text-gray-500 font-mono">0.50</span>
-        </label>
-        <input type="range" id="drumh3d-fx-bgintensity"
-            min="0" max="1" step="0.05" value="0.5"
-            oninput="window.drumH3dSetFx && window.drumH3dSetFx('bgIntensity', this.value); document.getElementById('drumh3d-fx-bgintensity-val').textContent = parseFloat(this.value).toFixed(2)"
-            class="w-full">
-        <label for="drumh3d-fx-bgreactive" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-2">
-            <input type="checkbox" id="drumh3d-fx-bgreactive" checked
-                onchange="window.drumH3dSetFx && window.drumH3dSetFx('bgReactive', this.checked)">
-            Audio-reactive ambience
-        </label>
-        <p class="text-xs text-gray-500 mt-1">
-            The backdrop pulses with the mix (stems analyser when a sloppak
-            is loaded). Off = it animates on time only.
-        </p>
-
-        <label for="drumh3d-fx-scorefx" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
-            <input type="checkbox" id="drumh3d-fx-scorefx" checked
-                onchange="window.drumH3dSetFx && window.drumH3dSetFx('scoreFx', this.checked)">
-            Score effects
-        </label>
-        <p class="text-xs text-gray-500 mt-1">
-            +1 pops on hits, a ring pulse every 10-combo, milestone bursts at
-            25/50/100, and a brief red flicker when a streak breaks.
-        </p>
-
-        <label for="drumh3d-fx-bloom" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
-            <input type="checkbox" id="drumh3d-fx-bloom" checked
-                onchange="window.drumH3dSetFx && window.drumH3dSetFx('bloom', this.checked)">
-            Glow (bloom)
-        </label>
-        <p class="text-xs text-gray-500 mt-1">
-            Soft light-bleed around the hit line and bright notes. Applies
-            live; turn off to reclaim GPU headroom on weak machines.
-        </p>
-
-        <label for="drumh3d-fx-sparks" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
-            <input type="checkbox" id="drumh3d-fx-sparks" checked
-                onchange="window.drumH3dSetFx && window.drumH3dSetFx('sparks', this.checked)">
-            Hit sparks
-        </label>
-        <p class="text-xs text-gray-500 mt-1">
-            A small particle burst on every scored pad hit.
-        </p>
-
-        <label for="drumh3d-fx-timing" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
-            <input type="checkbox" id="drumh3d-fx-timing" checked
-                onchange="window.drumH3dSetFx && window.drumH3dSetFx('timingFx', this.checked)">
-            Timing colours
-        </label>
-        <p class="text-xs text-gray-500 mt-1">
-            Tint hit feedback by timing — on-time green, early cyan, late
-            amber. Off = always green.
-        </p>
-
-        <label for="drumh3d-fx-streak" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
-            <input type="checkbox" id="drumh3d-fx-streak" checked
-                onchange="window.drumH3dSetFx && window.drumH3dSetFx('streakFx', this.checked)">
-            Streak feedback
-        </label>
-        <p class="text-xs text-gray-500 mt-1">
-            Spark bursts grow with your combo.
-        </p>
-
-        <label for="drumh3d-fx-hitfx" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">
-            Hit feedback intensity <span id="drumh3d-fx-hitfx-val" class="text-gray-500 font-mono">0.70</span>
-        </label>
-        <input type="range" id="drumh3d-fx-hitfx"
-            min="0" max="1" step="0.05" value="0.7"
-            oninput="window.drumH3dSetFx && window.drumH3dSetFx('hitFx', this.value); document.getElementById('drumh3d-fx-hitfx-val').textContent = parseFloat(this.value).toFixed(2)"
-            class="w-full">
-        <p class="text-xs text-gray-500 mt-1">
-            Drives the lane flashes, approach glow and the kick camera pulse.
-            0 turns them off.
-        </p>
     </div>
 
     <!-- MIDI input -->
@@ -350,52 +193,8 @@
 
     <script>
     (function () {
-        // Mirror of PALETTES in screen.js — kept in sync for swatch previews.
-        const PALETTES = {
-            default: [0xff2828, 0xffd400, 0x2080ff, 0xff8020, 0x30d040, 0xa040ff, 0xff6bd5, 0x6bffe6],
-            neon:    [0xff0030, 0xffe800, 0x0080ff, 0xff8030, 0x40ff50, 0xb050ff, 0xff40d0, 0x40ffd0],
-            pastel:  [0xe89aa0, 0xefdf90, 0x9adfee, 0xefb898, 0xa6e0a8, 0xc4a6e0, 0xe0a6c8, 0xa6e0d8],
-        };
+        // INIT-003/SPEC-006: Drums-tab fragment (mapping / profile / MIDI / visual lanes).
 
-        function toHex(n) { return '#' + n.toString(16).padStart(6, '0'); }
-
-        // Palette swatch preview: read the FIRST 8 pieces of the active
-        // kit's lanes (or pad to 8) for colour reference.
-        window._drumH3dRenderPaletteSwatches = function (id) {
-            const pal = PALETTES[id] || PALETTES.default;
-            const kit = (window.drumH3dGetKit && window.drumH3dGetKit()) || null;
-            const lanes = (kit && kit.lanes) || [];
-            // The kick always shows amber — same as the renderer. Other
-            // lanes follow the piece's palette index from screen.js,
-            // retrieved via drumH3dGetPiecePaletteIdx() so settings.html
-            // stays in sync when pieces are added without any copy-paste.
-            const PALETTE_IDX = (window.drumH3dGetPiecePaletteIdx && window.drumH3dGetPiecePaletteIdx()) || {
-                kick: -1,  // sentinel — render amber
-                snare: 0, snare_xstick: 0,
-                hh_closed: 7, hh_open: 7, hh_pedal: 7,
-                tom_hi: 4, tom_mid: 2, tom_low: 5, tom_floor: 5,
-                crash_l: 1, crash_r: 1, splash: 1, china: 1,
-                ride: 3, ride_bell: 3,
-            };
-            for (let i = 0; i < 8; i++) {
-                const el = document.getElementById('drumh3d-swatch-' + i);
-                if (!el) continue;
-                const ln = lanes[i];
-                if (!ln) { el.style.background = '#000'; el.style.opacity = '0.3'; continue; }
-                el.style.opacity = '1';
-                const idx = PALETTE_IDX[ln.piece];
-                if (idx === -1) { el.style.background = '#ffa030'; continue; }
-                el.style.background = toHex(pal[idx ?? 0]);
-            }
-        };
-
-        // Read fresh inside renderKit() — they're set by screen.js's IIFE,
-        // which may not have finished evaluating when this inline script
-        // first runs if the user opens Settings before the player ever loaded.
-
-        // Friendly piece labels — self-contained so renderKit's callbacks
-        // (which run after our local PIECE_LABELS scope has cleared)
-        // still work.
         const FRIENDLY = {
             kick: 'Kick',
             snare: 'Snare', snare_xstick: 'Snare (cross-stick)',
@@ -407,31 +206,24 @@
         };
         function friendly(p) { return FRIENDLY[p] || p; }
 
-        // Render the current kit's lane list with reorder + remove buttons.
         function renderKit() {
             const kit = window.drumH3dGetKit ? window.drumH3dGetKit() : null;
             if (!kit) {
-                // screen.js hasn't published its API yet — defer one tick.
-                // Happens when the settings panel opens before the player
-                // has loaded a song.
                 setTimeout(renderKit, 100);
                 return;
             }
             const PIECE_CATEGORY = window.drumH3dGetPieceCategory ? window.drumH3dGetPieceCategory() : {};
             const ALL_PIECES = window.drumH3dGetAllPieces ? window.drumH3dGetAllPieces() : [];
-            document.getElementById('drumh3d-kit-name').value = kit.name || '';
+            const nameEl = document.getElementById('drumh3d-kit-name');
+            if (nameEl) nameEl.value = kit.name || '';
 
-            // Lanes panel — order matters: up/down buttons reorder, x
-            // removes (also clears any fallback that pointed at the
-            // removed piece on the way out).
             const lanesEl = document.getElementById('drumh3d-kit-lanes');
+            if (!lanesEl) return;
             lanesEl.innerHTML = '';
             const taken = new Set(kit.lanes.map(l => l.piece));
             kit.lanes.forEach((ln, i) => {
                 const row = document.createElement('div');
                 row.className = 'flex items-center gap-2 px-2 py-1 bg-dark-700/60 rounded';
-                // Screen readers should hear the user-facing label
-                // ("Hi-hat (closed)") not the internal piece id ("hh_closed").
                 const pieceName = friendly(ln.piece);
                 row.innerHTML =
                     `<span class="font-mono text-[10px] text-gray-500 w-6 text-center">${i}</span>` +
@@ -449,79 +241,74 @@
                     if (act === 'up' && i > 0) {
                         [next.lanes[i - 1], next.lanes[i]] = [next.lanes[i], next.lanes[i - 1]];
                     } else if (act === 'down' && i < next.lanes.length - 1) {
-                        [next.lanes[i + 1], next.lanes[i]] = [next.lanes[i], next.lanes[i + 1]];
+                        [next.lanes[i + 1], next.lanes[i]] = [next.lanes[i], next.lanes[i - 1]];
                     } else if (act === 'rm') {
                         const removed = next.lanes[i].piece;
                         next.lanes.splice(i, 1);
-                        // Drop any fallback that targeted the removed piece
-                        // — it's no longer a valid target.
                         for (const k of Object.keys(next.fallbacks || {})) {
                             if (next.fallbacks[k] === removed) delete next.fallbacks[k];
                         }
                     } else { return; }
-                    // Guard: drumH3dSetKit returns false when validation
-                    // rejects the kit (e.g. empty lanes[] after last removal).
                     if (!window.drumH3dSetKit(next)) {
                         setStatus('Kit must have at least one lane', 'err');
                     }
                 };
             });
 
-            // Add-a-piece dropdown — pieces NOT already in lanes, grouped
-            // by category (kick / drums / cymbals).
             const addSel = document.getElementById('drumh3d-kit-add');
-            addSel.innerHTML = '<option value="">— pick a piece to add —</option>';
-            const groups = { kick: [], drum: [], cymbal: [] };
-            for (const p of ALL_PIECES) {
-                if (taken.has(p)) continue;
-                const cat = PIECE_CATEGORY[p] || 'drum';
-                if (groups[cat]) groups[cat].push(p);
-            }
-            for (const [cat, label] of [['kick', 'Kick'], ['drum', 'Drums'], ['cymbal', 'Cymbals']]) {
-                if (!groups[cat].length) continue;
-                const og = document.createElement('optgroup');
-                og.label = label;
-                for (const p of groups[cat]) {
-                    const opt = document.createElement('option');
-                    opt.value = p;
-                    opt.textContent = friendly(p);
-                    og.appendChild(opt);
+            if (addSel) {
+                addSel.innerHTML = '<option value="">— pick a piece to add —</option>';
+                const groups = { kick: [], drum: [], cymbal: [] };
+                for (const p of ALL_PIECES) {
+                    if (taken.has(p)) continue;
+                    const cat = PIECE_CATEGORY[p] || 'drum';
+                    if (groups[cat]) groups[cat].push(p);
                 }
-                addSel.appendChild(og);
+                for (const [cat, label] of [['kick', 'Kick'], ['drum', 'Drums'], ['cymbal', 'Cymbals']]) {
+                    if (!groups[cat].length) continue;
+                    const og = document.createElement('optgroup');
+                    og.label = label;
+                    for (const p of groups[cat]) {
+                        const opt = document.createElement('option');
+                        opt.value = p;
+                        opt.textContent = friendly(p);
+                        og.appendChild(opt);
+                    }
+                    addSel.appendChild(og);
+                }
             }
 
-            // Fallback list — every piece NOT in lanes gets a dropdown
-            // mapping it to one of the user's pieces (or "—" to drop).
             const fbEl = document.getElementById('drumh3d-kit-fallbacks');
-            fbEl.innerHTML = '';
-            for (const p of ALL_PIECES) {
-                if (taken.has(p)) continue;
-                const row = document.createElement('div');
-                row.className = 'flex items-center gap-2 px-2 py-1';
-                const labelTxt = friendly(p);
-                const current = (kit.fallbacks && kit.fallbacks[p]) || '';
-                let optsHtml = '<option value="">— drop —</option>';
-                for (const ln of kit.lanes) {
-                    const sel = ln.piece === current ? ' selected' : '';
-                    optsHtml += `<option value="${ln.piece}"${sel}>${friendly(ln.piece)}</option>`;
+            if (fbEl) {
+                fbEl.innerHTML = '';
+                for (const p of ALL_PIECES) {
+                    if (taken.has(p)) continue;
+                    const row = document.createElement('div');
+                    row.className = 'flex items-center gap-2 px-2 py-1';
+                    const labelTxt = friendly(p);
+                    const current = (kit.fallbacks && kit.fallbacks[p]) || '';
+                    let optsHtml = '<option value="">— drop —</option>';
+                    for (const ln of kit.lanes) {
+                        const sel = ln.piece === current ? ' selected' : '';
+                        optsHtml += `<option value="${ln.piece}"${sel}>${friendly(ln.piece)}</option>`;
+                    }
+                    row.innerHTML =
+                        `<span class="flex-1 text-xs text-gray-400">${labelTxt}</span>` +
+                        `<span class="text-xs text-gray-600">→</span>` +
+                        `<select data-from="${p}" class="bg-dark-700 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 outline-none">${optsHtml}</select>`;
+                    fbEl.appendChild(row);
                 }
-                row.innerHTML =
-                    `<span class="flex-1 text-xs text-gray-400">${labelTxt}</span>` +
-                    `<span class="text-xs text-gray-600">→</span>` +
-                    `<select data-from="${p}" class="bg-dark-700 border border-gray-800 rounded px-2 py-1 text-xs text-gray-300 outline-none">${optsHtml}</select>`;
-                fbEl.appendChild(row);
+                fbEl.querySelectorAll('select').forEach(s => {
+                    s.onchange = () => {
+                        const next = JSON.parse(JSON.stringify(kit));
+                        next.fallbacks = next.fallbacks || {};
+                        if (s.value) next.fallbacks[s.dataset.from] = s.value;
+                        else delete next.fallbacks[s.dataset.from];
+                        window.drumH3dSetKit(next);
+                    };
+                });
             }
-            fbEl.querySelectorAll('select').forEach(s => {
-                s.onchange = () => {
-                    const next = JSON.parse(JSON.stringify(kit));
-                    next.fallbacks = next.fallbacks || {};
-                    if (s.value) next.fallbacks[s.dataset.from] = s.value;
-                    else delete next.fallbacks[s.dataset.from];
-                    window.drumH3dSetKit(next);  // event-driven renderKit() via drum_h3d:kit
-                };
-            });
 
-            // Refresh palette swatches so they reflect the new lane order.
             if (window._drumH3dRenderPaletteSwatches) {
                 const pSel = document.getElementById('drumh3d-palette');
                 window._drumH3dRenderPaletteSwatches(pSel ? pSel.value : 'default');
@@ -536,27 +323,20 @@
             setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 3000);
         }
 
-        // Expose the kit interaction surface to the inline onclick / onchange
-        // attributes used by the markup above.
         window._drumH3dKit = {
             onNameInput(name) {
-                // Use the name-only setter to avoid triggering 'drum_h3d:kit'
-                // on every keystroke — that event causes a full WebGL scene
-                // teardown/reinit which produces visible stutter while typing.
                 window.drumH3dSetKitName && window.drumH3dSetKitName(name);
             },
             onAddPiece(piece) {
                 if (!piece) return;
                 const kit = window.drumH3dGetKit();
                 kit.lanes.push({ piece });
-                window.drumH3dSetKit(kit);  // event-driven renderKit() via drum_h3d:kit
+                window.drumH3dSetKit(kit);
             },
             copyToClipboard() {
                 const b64 = window.drumH3dExportKit && window.drumH3dExportKit();
                 if (!b64) return setStatus('export failed', 'err');
                 const _showImportFallback = (str) => {
-                    // Clipboard unavailable — reveal the import row so the user can
-                    // copy the string from the textarea manually.
                     document.getElementById('drumh3d-kit-import-row').classList.remove('hidden');
                     const ta = document.getElementById('drumh3d-kit-import-text');
                     ta.value = str;
@@ -577,24 +357,17 @@
                 const txt = document.getElementById('drumh3d-kit-import-text').value;
                 if (!txt.trim()) return setStatus('paste a kit string first', 'err');
                 const ok = window.drumH3dImportKit && window.drumH3dImportKit(txt);
-                // drumH3dImportKit calls drumH3dSetKit which dispatches drum_h3d:kit;
-                // the event listener re-renders the panel, so no explicit renderKit().
                 if (ok) { setStatus('✓ kit imported', 'ok'); }
                 else setStatus('invalid kit string', 'err');
             },
             resetDefault() {
                 window.drumH3dResetKit && window.drumH3dResetKit();
-                // drumH3dResetKit calls drumH3dSetKit → dispatches drum_h3d:kit
-                // → event listener re-renders. No explicit renderKit() needed.
                 setStatus('✓ reset to default', 'ok');
             },
         };
 
-        // Re-render the kit list whenever the kit changes (covers external
-        // changes from setKit() / importKit() not initiated by this panel).
         window.addEventListener('drum_h3d:kit', () => renderKit());
 
-        // ─── MIDI kit mapping editor (INIT-002/SPEC-004) ───────
         function el(tag, className, text) {
             const node = document.createElement(tag);
             if (className) node.className = className;
@@ -643,7 +416,7 @@
             }
             if (activeEl) {
                 activeEl.textContent = status.confirmedId
-                    ? ('Active kit: ' + (status.confirmedName || status.confirmedId) + (status.canMutate ? '' : ''))
+                    ? ('Active kit: ' + (status.confirmedName || status.confirmedId))
                     : 'No kit confirmed — mapping edits are disabled.';
             }
             if (statusEl) {
@@ -736,13 +509,75 @@
             }
         })();
 
-        // ─── MIDI device picker ───────────────────────────────
+        function renderProfiles() {
+            const status = window.drumH3dGetProfileStatus
+                ? window.drumH3dGetProfileStatus()
+                : { selectedId: '', activeId: '', activeName: '', profiles: [] };
+            const sel = document.getElementById('drumh3d-profile');
+            const useBtn = document.getElementById('drumh3d-use-profile');
+            const activeEl = document.getElementById('drumh3d-profile-active');
+            if (!sel) return;
+            const prev = sel.value;
+            sel.textContent = '';
+            const none = document.createElement('option');
+            none.value = '';
+            none.textContent = '— select a profile —';
+            sel.appendChild(none);
+            const list = status.profiles || [];
+            for (let i = 0; i < list.length; i++) {
+                const p = list[i];
+                if (!p || !p.id) continue;
+                const opt = document.createElement('option');
+                opt.value = String(p.id);
+                opt.textContent = p.name ? String(p.name) : String(p.id);
+                sel.appendChild(opt);
+            }
+            const selected = status.selectedId || prev || status.activeId || '';
+            if (selected && Array.from(sel.options).some((o) => o.value === selected)) sel.value = selected;
+            const canActivate = !!(sel.value && sel.value !== status.activeId);
+            if (useBtn) {
+                useBtn.disabled = !canActivate;
+                useBtn.setAttribute('aria-disabled', canActivate ? 'false' : 'true');
+            }
+            if (activeEl) {
+                activeEl.textContent = status.activeId
+                    ? ('Active profile: ' + (status.activeName || status.activeId))
+                    : 'No profile active.';
+            }
+        }
+
+        const profileSel = document.getElementById('drumh3d-profile');
+        if (profileSel) {
+            profileSel.addEventListener('change', function () {
+                if (window.drumH3dSelectProfile) window.drumH3dSelectProfile(this.value);
+            });
+        }
+        const useProfileBtn = document.getElementById('drumh3d-use-profile');
+        if (useProfileBtn) {
+            useProfileBtn.addEventListener('click', function () {
+                if (window.drumH3dActivateProfile) window.drumH3dActivateProfile();
+            });
+        }
+        window.addEventListener('drum_h3d:profiles', renderProfiles);
+        (function pollProfiles() {
+            if (window.drumH3dEnsureProfilesInit) {
+                Promise.resolve(window.drumH3dEnsureProfilesInit()).then(renderProfiles);
+                renderProfiles();
+            } else {
+                setTimeout(pollProfiles, 100);
+            }
+        })();
+
         function renderMidiPicker() {
             const sel = document.getElementById('drumh3d-midi-input');
             if (!sel) return;
             const inputs = window.drumH3dListMidiInputs ? window.drumH3dListMidiInputs() : [];
             const current = window.drumH3dGetMidiInputId ? window.drumH3dGetMidiInputId() : '';
-            sel.innerHTML = '<option value="">— none —</option>';
+            sel.textContent = '';
+            const none = document.createElement('option');
+            none.value = '';
+            none.textContent = '— none —';
+            sel.appendChild(none);
             for (const inp of inputs) {
                 const opt = document.createElement('option');
                 opt.value = inp.id;
@@ -750,8 +585,6 @@
                 if (inp.id === current) opt.selected = true;
                 sel.appendChild(opt);
             }
-            // Sync volume slider with the actual persisted value (default
-            // 0.7 if storage was empty or never written).
             const vol = window.drumH3dGetSynthVolume ? window.drumH3dGetSynthVolume() : 0.7;
             const volSlider = document.getElementById('drumh3d-synth-vol');
             const volLabel = document.getElementById('drumh3d-synth-vol-val');
@@ -765,77 +598,16 @@
         }
         window.addEventListener('drum_h3d:midi_devices', renderMidiPicker);
         window.addEventListener('drum_h3d:input', renderMidiPicker);
-        // Kick off MIDI initialisation if the player viz never ran (user
-        // opened Settings → 3D Drum Highway directly). _midiInit is
-        // idempotent so this is safe even when the viz is also active.
-        // Re-render the picker when the access promise settles.
         (function pollMidi() {
             if (window.drumH3dEnsureMidiInit) {
                 Promise.resolve(window.drumH3dEnsureMidiInit()).then(renderMidiPicker);
-                renderMidiPicker();  // first paint with whatever's cached
+                renderMidiPicker();
             } else {
                 setTimeout(pollMidi, 100);
             }
         })();
 
-        // Hydrate controls from stored config on first paint.
-        // Narrow the try/catch to just localStorage reads — renderKit() and
-        // swatches must always run even when storage is blocked/disabled.
-        const pSel = document.getElementById('drumh3d-palette');
-        const cam = document.getElementById('drumh3d-camera');
-        const camVal = document.getElementById('drumh3d-camera-val');
-        try {
-            const storedPal = localStorage.getItem('drum_h3d_palette');
-            if (storedPal && PALETTES[storedPal]) pSel.value = storedPal;
-
-            const storedCam = parseFloat(localStorage.getItem('drum_h3d_camera_angle'));
-            if (Number.isFinite(storedCam)) {
-                const c = Math.min(1, Math.max(0, storedCam));
-                cam.value = String(c);
-                camVal.textContent = c.toFixed(2);
-            }
-
-            // FX toggles (drum_h3d_bg_* — guitar-parity graphics controls).
-            // Only explicit values override; absent/corrupt keys keep the
-            // default (ON), matching screen.js readFxSettings.
-            const hydrateFxBool = (key, elId) => {
-                const raw = localStorage.getItem('drum_h3d_bg_' + key);
-                if (raw === '1' || raw === 'true') document.getElementById(elId).checked = true;
-                else if (raw === '0' || raw === 'false') document.getElementById(elId).checked = false;
-            };
-            hydrateFxBool('bloom', 'drumh3d-fx-bloom');
-            hydrateFxBool('sparks', 'drumh3d-fx-sparks');
-            hydrateFxBool('timingFx', 'drumh3d-fx-timing');
-            hydrateFxBool('streakFx', 'drumh3d-fx-streak');
-            hydrateFxBool('cinematic', 'drumh3d-fx-cinematic');
-            hydrateFxBool('bgReactive', 'drumh3d-fx-bgreactive');
-            hydrateFxBool('scoreFx', 'drumh3d-fx-scorefx');
-            const hydrateFxRange = (key, elId, valId) => {
-                const n = parseFloat(localStorage.getItem('drum_h3d_bg_' + key));
-                if (!Number.isFinite(n)) return;
-                const v = Math.min(1, Math.max(0, n));
-                document.getElementById(elId).value = String(v);
-                document.getElementById(valId).textContent = v.toFixed(2);
-            };
-            hydrateFxRange('hitFx', 'drumh3d-fx-hitfx', 'drumh3d-fx-hitfx-val');
-            hydrateFxRange('glow', 'drumh3d-fx-glow', 'drumh3d-fx-glow-val');
-            hydrateFxRange('vibrancy', 'drumh3d-fx-vibrancy', 'drumh3d-fx-vibrancy-val');
-            hydrateFxRange('bgIntensity', 'drumh3d-fx-bgintensity', 'drumh3d-fx-bgintensity-val');
-            const storedStyle = localStorage.getItem('drum_h3d_bg_style');
-            const styleSel = document.getElementById('drumh3d-fx-bgstyle');
-            if (storedStyle && Array.from(styleSel.options).some(o => o.value === storedStyle)) {
-                styleSel.value = storedStyle;
-            }
-            const storedTheme = localStorage.getItem('drum_h3d_bg_theme');
-            const themeSel = document.getElementById('drumh3d-fx-theme');
-            if (storedTheme && Array.from(themeSel.options).some(o => o.value === storedTheme)) {
-                themeSel.value = storedTheme;
-            }
-        } catch (e) {
-            console.warn('[Drum-Hwy3D settings] hydration failed:', e);
-        }
         renderKit();
-        window._drumH3dRenderPaletteSwatches(pSel.value);
     })();
     </script>
 </div>

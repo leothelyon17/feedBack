@@ -1,0 +1,289 @@
+<div role="group" aria-labelledby="drumh3d-gfx-heading" data-drumh3d-fragment="graphics">
+    <h3 id="drumh3d-gfx-heading" class="text-sm font-medium text-gray-400 mb-2">3D Drum Highway</h3>
+    <p class="text-xs text-gray-500 mb-3">
+        Look and camera for the 3D drum highway. MIDI mapping and drum
+        profiles live on the Drums tab.
+    </p>
+
+    <!-- Palette -->
+    <div class="mt-3">
+        <label for="drumh3d-palette" class="text-xs font-medium text-gray-400 mb-1 block">Palette</label>
+        <select id="drumh3d-palette"
+            onchange="window.drumH3dSetPalette && window.drumH3dSetPalette(this.value); (window._drumH3dRenderPaletteSwatches || function(){})(this.value)"
+            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
+            <option value="default">Default (Classic)</option>
+            <option value="neon">Neon (saturated, electric)</option>
+            <option value="pastel">Pastel (soft, low contrast)</option>
+        </select>
+        <div class="mt-2 flex items-center gap-1" aria-hidden="true">
+            <span id="drumh3d-swatch-0" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
+            <span id="drumh3d-swatch-1" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
+            <span id="drumh3d-swatch-2" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
+            <span id="drumh3d-swatch-3" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
+            <span id="drumh3d-swatch-4" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
+            <span id="drumh3d-swatch-5" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
+            <span id="drumh3d-swatch-6" class="inline-block h-6 w-5 rounded border border-gray-700/60"></span>
+            <span id="drumh3d-swatch-7" class="inline-block h-6 w-5 rounded border border-gray-700/60"
+                  style="background:#ffa030"></span>
+        </div>
+    </div>
+
+    <!-- Camera angle -->
+    <div class="mt-4">
+        <label for="drumh3d-camera" class="text-xs font-medium text-gray-400 mb-1 block">
+            Camera angle <span id="drumh3d-camera-val" class="text-gray-500 font-mono">0.35</span>
+        </label>
+        <input type="range" id="drumh3d-camera"
+            min="0" max="1" step="0.05" value="0.35"
+            oninput="window.drumH3dSetCameraAngle && window.drumH3dSetCameraAngle(this.value); document.getElementById('drumh3d-camera-val').textContent = parseFloat(this.value).toFixed(2)"
+            class="w-full">
+        <p class="text-xs text-gray-500 mt-1">0 = down the lanes · 1 = top-down</p>
+    </div>
+
+    <!-- Graphics -->
+    <div class="mt-6 border-t border-gray-800 pt-4">
+        <h4 class="text-xs font-medium text-gray-300 mb-2">Graphics</h4>
+
+        <label for="drumh3d-fx-theme" class="text-xs font-medium text-gray-400 mb-1 block">Scene theme</label>
+        <select id="drumh3d-fx-theme"
+            onchange="window.drumH3dSetTheme && window.drumH3dSetTheme(this.value)"
+            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
+            <option value="default">Default (original)</option>
+            <option value="midnight">Midnight</option>
+            <option value="charcoal">Charcoal</option>
+            <option value="deeppurple">Deep Purple</option>
+            <option value="forest">Forest</option>
+            <option value="warmslate">Warm Slate</option>
+            <option value="deepfocus">Deep Focus</option>
+            <option value="deepsea">Deep Sea</option>
+            <option value="cathode">Cathode</option>
+            <option value="cathodegreen">Cathode Green</option>
+            <option value="hearth">Hearth</option>
+        </select>
+        <p class="text-xs text-gray-500 mt-1 mb-3">
+            Background, floor and lane colours — the same theme names as the
+            guitar highway, so your look carries across instruments. Piece
+            colours stay with the Palette above.
+        </p>
+
+        <label for="drumh3d-fx-cinematic" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+            <input type="checkbox" id="drumh3d-fx-cinematic" checked
+                onchange="window.drumH3dSetFx && window.drumH3dSetFx('cinematic', this.checked)">
+            Cinematic lighting
+        </label>
+        <p class="text-xs text-gray-500 mt-1">
+            Dimmer ambience, stronger key light — more depth on the cymbals
+            and drumheads.
+        </p>
+
+        <label for="drumh3d-fx-glow" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">
+            Glow strength <span id="drumh3d-fx-glow-val" class="text-gray-500 font-mono">0.50</span>
+        </label>
+        <input type="range" id="drumh3d-fx-glow"
+            min="0" max="1" step="0.05" value="0.5"
+            oninput="window.drumH3dSetFx && window.drumH3dSetFx('glow', this.value); document.getElementById('drumh3d-fx-glow-val').textContent = parseFloat(this.value).toFixed(2)"
+            class="w-full">
+        <p class="text-xs text-gray-500 mt-1">
+            How hard the notes and hit line self-illuminate (0.5 = stock).
+            Pairs with bloom.
+        </p>
+
+        <label for="drumh3d-fx-vibrancy" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">
+            Lane vibrancy <span id="drumh3d-fx-vibrancy-val" class="text-gray-500 font-mono">0.85</span>
+        </label>
+        <input type="range" id="drumh3d-fx-vibrancy"
+            min="0" max="1" step="0.05" value="0.85"
+            oninput="window.drumH3dSetFx && window.drumH3dSetFx('vibrancy', this.value); document.getElementById('drumh3d-fx-vibrancy-val').textContent = parseFloat(this.value).toFixed(2)"
+            class="w-full">
+        <p class="text-xs text-gray-500 mt-1">
+            Lane stripe and accent-ring strength — lower for a calmer deck.
+        </p>
+
+        <label for="drumh3d-fx-bgstyle" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">Background ambience</label>
+        <select id="drumh3d-fx-bgstyle"
+            onchange="window.drumH3dSetBgStyle && window.drumH3dSetBgStyle(this.value)"
+            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-2 text-xs text-gray-300 outline-none">
+            <option value="off">Off</option>
+            <option value="particles" selected>Particles</option>
+            <option value="lights">Stage lights</option>
+            <option value="geometric">Geometric</option>
+        </select>
+        <label for="drumh3d-fx-bgintensity" class="text-xs font-medium text-gray-400 mb-1 mt-2 block">
+            Ambience intensity <span id="drumh3d-fx-bgintensity-val" class="text-gray-500 font-mono">0.50</span>
+        </label>
+        <input type="range" id="drumh3d-fx-bgintensity"
+            min="0" max="1" step="0.05" value="0.5"
+            oninput="window.drumH3dSetFx && window.drumH3dSetFx('bgIntensity', this.value); document.getElementById('drumh3d-fx-bgintensity-val').textContent = parseFloat(this.value).toFixed(2)"
+            class="w-full">
+        <label for="drumh3d-fx-bgreactive" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-2">
+            <input type="checkbox" id="drumh3d-fx-bgreactive" checked
+                onchange="window.drumH3dSetFx && window.drumH3dSetFx('bgReactive', this.checked)">
+            Audio-reactive ambience
+        </label>
+        <p class="text-xs text-gray-500 mt-1">
+            The backdrop pulses with the mix (stems analyser when a sloppak
+            is loaded). Off = it animates on time only.
+        </p>
+
+        <label for="drumh3d-fx-scorefx" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
+            <input type="checkbox" id="drumh3d-fx-scorefx" checked
+                onchange="window.drumH3dSetFx && window.drumH3dSetFx('scoreFx', this.checked)">
+            Score effects
+        </label>
+        <p class="text-xs text-gray-500 mt-1">
+            +1 pops on hits, a ring pulse every 10-combo, milestone bursts at
+            25/50/100, and a brief red flicker when a streak breaks.
+        </p>
+
+        <label for="drumh3d-fx-bloom" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
+            <input type="checkbox" id="drumh3d-fx-bloom" checked
+                onchange="window.drumH3dSetFx && window.drumH3dSetFx('bloom', this.checked)">
+            Glow (bloom)
+        </label>
+        <p class="text-xs text-gray-500 mt-1">
+            Soft light-bleed around the hit line and bright notes. Applies
+            live; turn off to reclaim GPU headroom on weak machines.
+        </p>
+
+        <label for="drumh3d-fx-sparks" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
+            <input type="checkbox" id="drumh3d-fx-sparks" checked
+                onchange="window.drumH3dSetFx && window.drumH3dSetFx('sparks', this.checked)">
+            Hit sparks
+        </label>
+        <p class="text-xs text-gray-500 mt-1">
+            A small particle burst on every scored pad hit.
+        </p>
+
+        <label for="drumh3d-fx-timing" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
+            <input type="checkbox" id="drumh3d-fx-timing" checked
+                onchange="window.drumH3dSetFx && window.drumH3dSetFx('timingFx', this.checked)">
+            Timing colours
+        </label>
+        <p class="text-xs text-gray-500 mt-1">
+            Tint hit feedback by timing — on-time green, early cyan, late
+            amber. Off = always green.
+        </p>
+
+        <label for="drumh3d-fx-streak" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
+            <input type="checkbox" id="drumh3d-fx-streak" checked
+                onchange="window.drumH3dSetFx && window.drumH3dSetFx('streakFx', this.checked)">
+            Streak feedback
+        </label>
+        <p class="text-xs text-gray-500 mt-1">
+            Spark bursts grow with your combo.
+        </p>
+
+        <label for="drumh3d-fx-hitfx" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">
+            Hit feedback intensity <span id="drumh3d-fx-hitfx-val" class="text-gray-500 font-mono">0.70</span>
+        </label>
+        <input type="range" id="drumh3d-fx-hitfx"
+            min="0" max="1" step="0.05" value="0.7"
+            oninput="window.drumH3dSetFx && window.drumH3dSetFx('hitFx', this.value); document.getElementById('drumh3d-fx-hitfx-val').textContent = parseFloat(this.value).toFixed(2)"
+            class="w-full">
+        <p class="text-xs text-gray-500 mt-1">
+            Drives the lane flashes, approach glow and the kick camera pulse.
+            0 turns them off.
+        </p>
+    </div>
+
+    <script>
+    (function () {
+        // INIT-003/SPEC-006: Graphics-only fragment (palette / camera / theme / bloom).
+        const PALETTES = {
+            default: [0xff2828, 0xffd400, 0x2080ff, 0xff8020, 0x30d040, 0xa040ff, 0xff6bd5, 0x6bffe6],
+            neon:    [0xff0030, 0xffe800, 0x0080ff, 0xff8030, 0x40ff50, 0xb050ff, 0xff40d0, 0x40ffd0],
+            pastel:  [0xe89aa0, 0xefdf90, 0x9adfee, 0xefb898, 0xa6e0a8, 0xc4a6e0, 0xe0a6c8, 0xa6e0d8],
+        };
+
+        function toHex(n) { return '#' + n.toString(16).padStart(6, '0'); }
+
+        window._drumH3dRenderPaletteSwatches = function (id) {
+            const pal = PALETTES[id] || PALETTES.default;
+            const kit = (window.drumH3dGetKit && window.drumH3dGetKit()) || null;
+            const lanes = (kit && kit.lanes) || [];
+            const PALETTE_IDX = (window.drumH3dGetPiecePaletteIdx && window.drumH3dGetPiecePaletteIdx()) || {
+                kick: -1,
+                snare: 0, snare_xstick: 0,
+                hh_closed: 7, hh_open: 7, hh_pedal: 7,
+                tom_hi: 4, tom_mid: 2, tom_low: 5, tom_floor: 5,
+                crash_l: 1, crash_r: 1, splash: 1, china: 1,
+                ride: 3, ride_bell: 3,
+            };
+            for (let i = 0; i < 8; i++) {
+                const el = document.getElementById('drumh3d-swatch-' + i);
+                if (!el) continue;
+                const ln = lanes[i];
+                if (!ln) { el.style.background = '#000'; el.style.opacity = '0.3'; continue; }
+                el.style.opacity = '1';
+                const idx = PALETTE_IDX[ln.piece];
+                if (idx === -1) { el.style.background = '#ffa030'; continue; }
+                el.style.background = toHex(pal[idx ?? 0]);
+            }
+        };
+
+        const pSel = document.getElementById('drumh3d-palette');
+        const cam = document.getElementById('drumh3d-camera');
+        const camVal = document.getElementById('drumh3d-camera-val');
+        try {
+            const storedPal = localStorage.getItem('drum_h3d_palette');
+            if (storedPal && PALETTES[storedPal] && pSel) pSel.value = storedPal;
+
+            const storedCam = parseFloat(localStorage.getItem('drum_h3d_camera_angle'));
+            if (Number.isFinite(storedCam) && cam && camVal) {
+                const c = Math.min(1, Math.max(0, storedCam));
+                cam.value = String(c);
+                camVal.textContent = c.toFixed(2);
+            }
+
+            const hydrateFxBool = (key, elId) => {
+                const raw = localStorage.getItem('drum_h3d_bg_' + key);
+                const el = document.getElementById(elId);
+                if (!el) return;
+                if (raw === '1' || raw === 'true') el.checked = true;
+                else if (raw === '0' || raw === 'false') el.checked = false;
+            };
+            hydrateFxBool('bloom', 'drumh3d-fx-bloom');
+            hydrateFxBool('sparks', 'drumh3d-fx-sparks');
+            hydrateFxBool('timingFx', 'drumh3d-fx-timing');
+            hydrateFxBool('streakFx', 'drumh3d-fx-streak');
+            hydrateFxBool('cinematic', 'drumh3d-fx-cinematic');
+            hydrateFxBool('bgReactive', 'drumh3d-fx-bgreactive');
+            hydrateFxBool('scoreFx', 'drumh3d-fx-scorefx');
+            const hydrateFxRange = (key, elId, valId) => {
+                const n = parseFloat(localStorage.getItem('drum_h3d_bg_' + key));
+                if (!Number.isFinite(n)) return;
+                const v = Math.min(1, Math.max(0, n));
+                const el = document.getElementById(elId);
+                const val = document.getElementById(valId);
+                if (el) el.value = String(v);
+                if (val) val.textContent = v.toFixed(2);
+            };
+            hydrateFxRange('hitFx', 'drumh3d-fx-hitfx', 'drumh3d-fx-hitfx-val');
+            hydrateFxRange('glow', 'drumh3d-fx-glow', 'drumh3d-fx-glow-val');
+            hydrateFxRange('vibrancy', 'drumh3d-fx-vibrancy', 'drumh3d-fx-vibrancy-val');
+            hydrateFxRange('bgIntensity', 'drumh3d-fx-bgintensity', 'drumh3d-fx-bgintensity-val');
+            const storedStyle = localStorage.getItem('drum_h3d_bg_style');
+            const styleSel = document.getElementById('drumh3d-fx-bgstyle');
+            if (storedStyle && styleSel && Array.from(styleSel.options).some(o => o.value === storedStyle)) {
+                styleSel.value = storedStyle;
+            }
+            const storedTheme = localStorage.getItem('drum_h3d_bg_theme');
+            const themeSel = document.getElementById('drumh3d-fx-theme');
+            if (storedTheme && themeSel && Array.from(themeSel.options).some(o => o.value === storedTheme)) {
+                themeSel.value = storedTheme;
+            }
+        } catch (e) {
+            console.warn('[Drum-Hwy3D settings] graphics hydration failed:', e);
+        }
+        if (window._drumH3dRenderPaletteSwatches) {
+            window._drumH3dRenderPaletteSwatches(pSel ? pSel.value : 'default');
+        }
+        window.addEventListener('drum_h3d:kit', function () {
+            if (window._drumH3dRenderPaletteSwatches) {
+                const sel = document.getElementById('drumh3d-palette');
+                window._drumH3dRenderPaletteSwatches(sel ? sel.value : 'default');
+            }
+        });
+    })();
+    </script>
+</div>
