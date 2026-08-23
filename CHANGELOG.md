@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Named drum profile documents (INIT-003/SPEC-001).** Session documents
+  (`id`, `name`, `kit_id`, `device`, `input`, `highway`) persist under
+  `{config_dir}/drums/profiles/` so the kit glob cannot ingest them. Helpers
+  seed one default from `active_kit` plus legacy stores, dual-write
+  `active_kit = profile.kit_id` on activate, and refuse `notes` / `owner_id`.
+  Existing settings without `active_drum_profile` keep loading.
 - **Auto mode prefers the 3D drum highway (#127, INIT-002/SPEC-005).** For a
   drum arrangement, Auto selects `drum_highway_3d` when the plugin is
   registered and WebGL2 is available, falls back to the 2D drum highway
