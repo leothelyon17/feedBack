@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MIDI devices panel and accessor (INIT-003/SPEC-011).** Settings → MIDI
+  is a working core panel: pick a detected `midiInput` source by label
+  (persist `source_id` as the logical key), choose a device type from
+  `GET /api/midi/device-types`, map catalog triggers (unmapped rows stay
+  visible with a blank MIDI number), and persist channel / hit detection /
+  synth volume on the active device `input`. `window.feedBack.midiDevices`
+  is the only in-page writer against `/api/midi/devices`. Activate POSTs
+  `active_midi_device` and emits one `feedback:midi-device-change` with
+  `{device_id}` only. Learn PUTs device notes; a 409 is shown in a live
+  region and is not retried. Display labels and shipped kit notes are
+  never persisted. Drum profile PUTs are unchanged (still no `notes`).
 - **MIDI Settings tab host stub (INIT-003/SPEC-010).** Settings gains an
   always-visible MIDI tab after Drums with mount `#plugin-settings-midi`.
   The tab is core chrome (like Gameplay), not plugin-gated. A future keys

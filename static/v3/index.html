@@ -136,6 +136,10 @@
     <script type="module" src="/static/capabilities/chart-transform.js"></script>
     <script type="module" src="/static/capabilities/note-detection.js"></script>
     <script type="module" src="/static/capabilities/midi-input.js"></script>
+    <!-- INIT-003/SPEC-011: only in-page writer against /api/midi/devices.
+         Loaded after midi-input.js so the Settings MIDI panel can list
+         logical sources (labels display-only). -->
+    <script type="module" src="/static/capabilities/midi-devices.js"></script>
     <!-- INIT-002/SPEC-002: shared drum MIDI-input/settings contract for the
          2D and 3D drum highways. Loaded after midi-input.js for consistency
          with the other domain-adjacent capabilities above, though it does
@@ -957,12 +961,111 @@
                 <div id="plugin-settings-drums" class="space-y-3"></div>
             </div>
 
-            <!-- ══ MIDI (INIT-003/SPEC-010 host stub) ══════════════════════ -->
-            <!-- Always visible — not plugin-gated. Panel body is SPEC-011.
-                 A future keys plugin may inject into #plugin-settings-midi. -->
+            <!-- ══ MIDI (INIT-003/SPEC-010 host stub + SPEC-011 panel) ══ -->
+            <!-- Always visible — not plugin-gated. Core panel is SPEC-011.
+                 A future keys plugin may inject extras into #plugin-settings-midi. -->
             <div class="fb-tabpanel" data-tab="midi">
                 <div class="fb-tabpanel-head"><h3>MIDI Settings</h3></div>
-                <p class="fb-settings-note">MIDI device picker, type, map, and knobs appear here.</p>
+                <div id="midi-devices-panel" class="space-y-3">
+                    <div>
+                        <h4 class="text-xs font-medium text-gray-300 mb-2">MIDI device</h4>
+                        <p class="text-xs text-gray-500 mb-3">
+                            Pick a detected port by its display name. The logical source id is what gets saved — never the raw port label.
+                        </p>
+                        <label for="midi-device-select" class="text-xs font-medium text-gray-400 mb-1 block">Saved devices</label>
+                        <div class="flex flex-wrap items-center gap-2 mb-3">
+                            <select id="midi-device-select" aria-label="Saved MIDI devices"
+                                class="flex-1 bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                            </select>
+                            <button type="button" id="midi-device-use"
+                                class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded-lg text-xs">
+                                Use this device
+                            </button>
+                        </div>
+                        <label for="midi-source-picker" class="text-xs font-medium text-gray-400 mb-1 block">Detected source</label>
+                        <div class="flex flex-wrap items-center gap-2 mb-3">
+                            <select id="midi-source-picker" aria-label="Detected MIDI source"
+                                class="flex-1 bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                            </select>
+                            <button type="button" id="midi-discover"
+                                class="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 rounded-lg text-xs">
+                                Detect MIDI inputs
+                            </button>
+                        </div>
+                        <label for="midi-device-name" class="text-xs font-medium text-gray-400 mb-1 block">New device name</label>
+                        <div class="flex flex-wrap items-center gap-2 mb-3">
+                            <input id="midi-device-name" type="text" autocomplete="off"
+                                class="flex-1 bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                            <button type="button" id="midi-device-create"
+                                class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded-lg text-xs">
+                                Create device
+                            </button>
+                        </div>
+                    </div>
+                    <div class="border-t border-gray-800 pt-4">
+                        <h4 class="text-xs font-medium text-gray-300 mb-2">Device type</h4>
+                        <p class="text-xs text-gray-500 mb-3">
+                            Catalog of triggers and zones. Changing type starts an empty map — shipped kit notes are not copied.
+                        </p>
+                        <label for="midi-device-type" class="text-xs font-medium text-gray-400 mb-1 block">Type</label>
+                        <select id="midi-device-type" aria-label="MIDI device type"
+                            class="w-full bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                        </select>
+                    </div>
+                    <div class="border-t border-gray-800 pt-4">
+                        <h4 class="text-xs font-medium text-gray-300 mb-2">Note map</h4>
+                        <p class="text-xs text-gray-500 mb-3">
+                            One row per catalog trigger. Unmapped rows stay visible with a blank MIDI number.
+                        </p>
+                        <p id="midi-map-status" class="text-xs text-gray-400 mb-2" role="status" aria-live="polite"></p>
+                        <table id="midi-map-table" class="w-full text-xs text-gray-300">
+                            <thead>
+                                <tr class="text-left text-gray-400">
+                                    <th>Trigger</th>
+                                    <th>Zone</th>
+                                    <th>MIDI</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="midi-map-body"></tbody>
+                        </table>
+                    </div>
+                    <div class="border-t border-gray-800 pt-4">
+                        <h4 class="text-xs font-medium text-gray-300 mb-2">Input</h4>
+                        <p class="text-xs text-gray-500 mb-3">
+                            Channel, hit detection, and synth volume persist on the active device — not on a drum profile.
+                        </p>
+                        <label for="midi-input-channel" class="text-xs font-medium text-gray-400 mb-1 block">MIDI channel</label>
+                        <select id="midi-input-channel" aria-label="MIDI channel"
+                            class="w-full bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                            <option value="-1">All</option>
+                            <option value="9">10 (Drums)</option>
+                            <option value="0">1</option>
+                            <option value="1">2</option>
+                            <option value="2">3</option>
+                            <option value="3">4</option>
+                            <option value="4">5</option>
+                            <option value="5">6</option>
+                            <option value="6">7</option>
+                            <option value="7">8</option>
+                            <option value="8">9</option>
+                            <option value="10">11</option>
+                            <option value="11">12</option>
+                            <option value="12">13</option>
+                            <option value="13">14</option>
+                            <option value="14">15</option>
+                            <option value="15">16</option>
+                        </select>
+                        <label for="midi-input-hit-detect" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
+                            <input type="checkbox" id="midi-input-hit-detect">
+                            Hit detection
+                        </label>
+                        <label for="midi-input-synth-vol" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">
+                            Synth volume <span id="midi-input-synth-vol-val" class="text-gray-500 font-mono">0.70</span>
+                        </label>
+                        <input type="range" id="midi-input-synth-vol" min="0" max="1" step="0.01" value="0.7" class="w-full">
+                    </div>
+                </div>
                 <div id="plugin-settings-midi" class="space-y-3"></div>
             </div>
         </div>
@@ -1383,6 +1486,9 @@
     <script defer src="/static/v3/lessons.js"></script>
     <script defer src="/static/v3/dashboard.js"></script>
     <script defer src="/static/v3/settings.js"></script>
+    <!-- INIT-003/SPEC-011: MIDI devices panel. Accessor is a head module;
+         this classic defer mounts when #midi-devices-panel exists. -->
+    <script defer src="/static/v3/midi-devices-panel.js"></script>
     <script defer src="/static/v3/interface-size-ui.js"></script>
     <!-- First-run home tour: spotlights the home cards via the shared tour
          engine (tour-engine.js, loaded above). Auto-runs once after onboarding
