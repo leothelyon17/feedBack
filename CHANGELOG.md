@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MIDI device-type catalogs (INIT-003/SPEC-007).** Shipped
+  `data/midi/device-types/alesis-strata-prime.json` lists Prime pads/zones
+  (`family: drums`) with no `notes` map and no default MIDI integers.
+  `lib/midi_device_types.py` loads shipped + `{config_dir}/midi/device-types/`
+  overlay (same id replaces triggers). Catalog JSON planted in the kit glob
+  is refused as a kit. Empty trigger lists are valid.
 - **3D Drums settings category (INIT-003/SPEC-006).** Bundled `drum_highway_3d`
   declares `settings.category: "drums"` so a 3D-only install shows the Drums
   tab. Mapping, kit confirm, MIDI input, and the named profile switcher mount
