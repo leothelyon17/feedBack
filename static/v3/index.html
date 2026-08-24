@@ -419,6 +419,9 @@
                 <!-- INIT-003/SPEC-003: host stub. Hidden unless an installed plugin
                      declared settings.category: "drums" (settings.js). -->
                 <button type="button" class="fb-tab" data-tab="drums" hidden>Drums</button>
+                <!-- INIT-003/SPEC-010: always-visible host stub (core input
+                     surface, like Gameplay). Do not add hidden. -->
+                <button type="button" class="fb-tab" data-tab="midi">MIDI</button>
             </div>
 
             <!-- ══ GAMEPLAY ════════════════════════════════════════════════ -->
@@ -952,6 +955,15 @@
             <div class="fb-tabpanel" data-tab="drums">
                 <div class="fb-tabpanel-head"><h3>Drums Settings</h3></div>
                 <div id="plugin-settings-drums" class="space-y-3"></div>
+            </div>
+
+            <!-- ══ MIDI (INIT-003/SPEC-010 host stub) ══════════════════════ -->
+            <!-- Always visible — not plugin-gated. Panel body is SPEC-011.
+                 A future keys plugin may inject into #plugin-settings-midi. -->
+            <div class="fb-tabpanel" data-tab="midi">
+                <div class="fb-tabpanel-head"><h3>MIDI Settings</h3></div>
+                <p class="fb-settings-note">MIDI device picker, type, map, and knobs appear here.</p>
+                <div id="plugin-settings-midi" class="space-y-3"></div>
             </div>
         </div>
     </div>

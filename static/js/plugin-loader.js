@@ -98,6 +98,7 @@ const _PLUGIN_SETTINGS_CONTAINER_IDS = [
     'plugin-settings', 'plugin-settings-graphics',
     'plugin-settings-mic', 'plugin-settings-progression',
     'plugin-settings-drums', // INIT-003/SPEC-003 host stub
+    'plugin-settings-midi', // INIT-003/SPEC-010 host stub
 ];
 function _pluginSettingsContainers() {
     const out = [];

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MIDI Settings tab host stub (INIT-003/SPEC-010).** Settings gains an
+  always-visible MIDI tab after Drums with mount `#plugin-settings-midi`.
+  The tab is core chrome (like Gameplay), not plugin-gated. A future keys
+  plugin may inject extras into the midi mount. Device picker, type, map,
+  and knobs are a later change. No generic tab-registration API.
 - **MIDI devices HTTP API and Learn lock (INIT-003/SPEC-009).**
   `GET /api/midi/device-types` lists catalogs with no default `notes` map.
   `GET`/`PUT`/`DELETE /api/midi/devices` and `/api/midi/devices/{id}` persist

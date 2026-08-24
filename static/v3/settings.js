@@ -48,6 +48,8 @@
         var out = [];
         document.querySelectorAll('#settings-tabbar .fb-tab').forEach(function (b) {
             // Hidden host stubs (INIT-003/SPEC-003 Drums) are not selectable.
+            // MIDI (INIT-003/SPEC-010) has no hidden attribute and no hide
+            // helper — it stays in the tablist with an empty plugin list.
             if (b.dataset.tab && !b.hidden) out.push(b.dataset.tab);
         });
         return out;
