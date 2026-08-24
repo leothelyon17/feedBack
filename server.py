@@ -52,6 +52,7 @@ import tailwind_rebuild
 from routers import audio_effects, artist_aliases, loops, playlists, ws_highway, ws_sync, chart, wanted, library_extras, shop, progression, profile, stats, version, diagnostics
 from routers import tunings as tunings_router
 from routers import drums as drums_router
+from routers import midi_devices as midi_devices_router
 import enrichment
 from routers import art as art_router
 from routers import settings as settings_router
@@ -1467,6 +1468,8 @@ app.include_router(tunings_router.router)
 
 # GET/PUT/DELETE /api/drums/... → routers/drums.py (INIT-001/SPEC-002)
 app.include_router(drums_router.router)
+# GET/PUT/DELETE /api/midi/... → routers/midi_devices.py (INIT-003/SPEC-009)
+app.include_router(midi_devices_router.router)
 
 
 

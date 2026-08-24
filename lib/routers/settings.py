@@ -24,6 +24,8 @@ import sloppak as sloppak_mod
 from appconfig import _load_config
 from drum_profiles import PROFILE_ID_RE, activate_profile, validate_profile
 from drums import SHIPPED_KITS_DIR, load_kits
+from midi_device_types import validate_device_type
+from midi_devices import DEVICE_ID_RE, list_devices, load_device, validate_device
 from metadata_db import _as_int, _sqlite_file_integrity_ok
 from tunings import (
     PROFILE_IDS, PROFILE_PATHWAYS, apply_flat_instrument_patch_to_profiles,
@@ -63,6 +65,10 @@ def _surface_player_keys(out: dict) -> dict:
     adp = out.get("active_drum_profile")
     if not (isinstance(adp, str) and PROFILE_ID_RE.fullmatch(adp)):
         out.pop("active_drum_profile", None)
+    # INIT-003/SPEC-009 — additive MIDI device pointer.
+    amd = out.get("active_midi_device")
+    if not (isinstance(amd, str) and DEVICE_ID_RE.fullmatch(amd)):
+        out.pop("active_midi_device", None)
     return out
 
 
@@ -313,6 +319,17 @@ def save_settings(data: dict):
             return _player_error("active_drum_profile must be a known profile id")
         else:
             pending_drum_profile = raw
+    # INIT-003/SPEC-009 — additive pointer; profile activate may dual-write it.
+    unset_active_midi_device = False
+    pending_midi_device = None
+    if "active_midi_device" in data:
+        raw = data["active_midi_device"]
+        if raw is None:
+            unset_active_midi_device = True
+        elif not isinstance(raw, str) or not DEVICE_ID_RE.fullmatch(raw):
+            return _player_error("active_midi_device must be a known device id")
+        else:
+            pending_midi_device = raw
     if "string_count" in data:
         raw = data["string_count"]
         if raw is not None:
@@ -393,9 +410,16 @@ def save_settings(data: dict):
             cfg.pop("active_kit", None)
         if unset_active_drum_profile:
             cfg.pop("active_drum_profile", None)
+        if unset_active_midi_device:
+            cfg.pop("active_midi_device", None)
+        if pending_midi_device is not None:
+            if load_device(appstate.config_dir, pending_midi_device) is None:
+                return _player_error("unknown device id")
+            cfg["active_midi_device"] = pending_midi_device
         if pending_drum_profile is not None:
             # Dual-write active_kit = profile.kit_id (INIT-003/SPEC-002).
-            # Wins over a co-submitted active_kit in the same POST.
+            # A profile device_id also dual-writes active_midi_device
+            # (INIT-003/SPEC-009) and wins over a co-submitted pointer.
             _activated, _aerr = activate_profile(
                 appstate.config_dir, pending_drum_profile, cfg
             )
@@ -445,7 +469,7 @@ _RESETTABLE_SETTINGS_KEYS = frozenset({
     "av_offset_ms", "countdown_before_song", "miss_penalty", "fail_behavior",
     "reference_pitch", "instrument", "string_count", "tuning", "pathway",
     "instrument_profiles", "active_instrument_profile",
-    "player_instrument", "active_kit", "active_drum_profile",
+    "player_instrument", "active_kit", "active_drum_profile", "active_midi_device",
     "achievements_enabled", "use_amp_sims",
 })
 
@@ -577,6 +601,10 @@ def _validate_server_config_types(cfg: dict) -> str | None:
         v = cfg["active_drum_profile"]
         if v is not None and (not isinstance(v, str) or not PROFILE_ID_RE.fullmatch(v)):
             return "server_config.active_drum_profile must be a profile id"
+    if "active_midi_device" in cfg:
+        v = cfg["active_midi_device"]
+        if v is not None and (not isinstance(v, str) or not DEVICE_ID_RE.fullmatch(v)):
+            return "server_config.active_midi_device must be a device id"
     return None
 
 
@@ -871,7 +899,10 @@ def _atomic_write_file(target: Path, payload: bytes):
 _CORE_LIBRARY_DB = "web_library.db"
 
 
-_CORE_EXPORT_ART_DIRS = ("playlist_covers/", "avatars/", "drums/")
+_CORE_EXPORT_ART_DIRS = (
+    "playlist_covers/", "avatars/", "drums/",
+    "midi/devices/", "midi/device-types/",
+)
 
 
 _CORE_IMPORT_ALLOWED = (_CORE_LIBRARY_DB,) + _CORE_EXPORT_ART_DIRS
@@ -932,6 +963,20 @@ def _is_drum_profile_relpath(relpath: str) -> bool:
     return norm.startswith("drums/profiles/") and norm.endswith(".json")
 
 
+def _is_midi_device_relpath(relpath: str) -> bool:
+    if not isinstance(relpath, str):
+        return False
+    norm = relpath.replace("\\", "/").lower()
+    return norm.startswith("midi/devices/") and norm.endswith(".json")
+
+
+def _is_midi_device_type_relpath(relpath: str) -> bool:
+    if not isinstance(relpath, str):
+        return False
+    norm = relpath.replace("\\", "/").lower()
+    return norm.startswith("midi/device-types/") and norm.endswith(".json")
+
+
 def _sanitize_exported_drum_profiles(files: dict) -> None:
     """Drop or canonicalize profile files so export never leaks raw port labels.
 
@@ -946,12 +991,50 @@ def _sanitize_exported_drum_profiles(files: dict) -> None:
         if not isinstance(data, dict):
             files.pop(relpath, None)
             continue
-        canonical, err = validate_profile(data)
+        canonical, err = validate_profile(data, config_dir=appstate.config_dir)
         if canonical is None:
             log.warning("settings export: skipped profile %s (%s)", relpath, err)
             files.pop(relpath, None)
             continue
         files[relpath] = {"encoding": "json", "data": canonical}
+
+
+def _sanitize_exported_midi_devices(files: dict) -> None:
+    """Canonicalize device JSON; drop records with raw port labels. INIT-003/SPEC-009."""
+    for relpath, entry in list(files.items()):
+        if not _is_midi_device_relpath(relpath):
+            continue
+        data = None
+        if isinstance(entry, dict) and entry.get("encoding") == "json":
+            data = entry.get("data")
+        if not isinstance(data, dict):
+            files.pop(relpath, None)
+            continue
+        canonical, err = validate_device(data, config_dir=appstate.config_dir)
+        if canonical is None:
+            log.warning("settings export: skipped device %s (%s)", relpath, err)
+            files.pop(relpath, None)
+            continue
+        files[relpath] = {"encoding": "json", "data": canonical}
+
+
+def _sanitize_exported_midi_device_types(files: dict) -> None:
+    """Export overlay catalogs only; never a notes map. INIT-003/SPEC-009."""
+    for relpath, entry in list(files.items()):
+        if not _is_midi_device_type_relpath(relpath):
+            continue
+        data = None
+        if isinstance(entry, dict) and entry.get("encoding") == "json":
+            data = entry.get("data")
+        if not isinstance(data, dict):
+            files.pop(relpath, None)
+            continue
+        parsed = validate_device_type(data)
+        if parsed is None or "notes" in parsed:
+            log.warning("settings export: skipped device type %s", relpath)
+            files.pop(relpath, None)
+            continue
+        files[relpath] = {"encoding": "json", "data": parsed}
 
 
 def _core_server_files() -> dict | None:
@@ -965,6 +1048,8 @@ def _core_server_files() -> dict | None:
         return None
     out: dict[str, dict] = dict(_walk_export_paths(list(_CORE_EXPORT_ART_DIRS), appstate.config_dir))
     _sanitize_exported_drum_profiles(out)
+    _sanitize_exported_midi_devices(out)
+    _sanitize_exported_midi_device_types(out)
     out[_CORE_LIBRARY_DB] = snap
     return out
 
@@ -1160,6 +1245,24 @@ def import_settings(bundle: dict):
         )
     db_restore_staged = False
     applied_core: list[str] = []
+    # INIT-003/SPEC-009: profiles in this bundle may point at devices that
+    # are also in the bundle and not yet on disk. Collect those ids first.
+    pending_device_ids: set[str] = set()
+    for _rp, _fe in core_blocks.items():
+        if not _is_midi_device_relpath(_rp):
+            continue
+        try:
+            _decoded = _decode_entry(_fe)
+            _obj = json.loads(_decoded)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(_obj, dict) and isinstance(_obj.get("id"), str) and DEVICE_ID_RE.fullmatch(_obj["id"]):
+            pending_device_ids.add(_obj["id"])
+        else:
+            _stem = Path(_rp).stem
+            if DEVICE_ID_RE.fullmatch(_stem):
+                pending_device_ids.add(_stem)
+    known_device_ids = {d["id"] for d in list_devices(appstate.config_dir)} | pending_device_ids
     for relpath, file_entry in core_blocks.items():
         if not isinstance(relpath, str) or not relpath:
             return JSONResponse(
@@ -1199,7 +1302,39 @@ def import_settings(bundle: dict):
                 {"ok": False, "error": "core_server_files: web_library.db is not a valid SQLite database"},
                 status_code=400,
             )
-        if _is_drum_profile_relpath(relpath):
+        if _is_midi_device_relpath(relpath):
+            # Never ingest device JSON as a kit. INIT-003/SPEC-009.
+            stem = Path(relpath).stem
+            try:
+                obj = json.loads(payload)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                return JSONResponse(
+                    {"ok": False, "error": f"core_server_files, file {relpath!r}: device body must be JSON"},
+                    status_code=400,
+                )
+            canonical, dev_err = validate_device(obj, stem, config_dir=appstate.config_dir)
+            if canonical is None:
+                return JSONResponse(
+                    {"ok": False, "error": f"core_server_files, file {relpath!r}: {dev_err}"},
+                    status_code=400,
+                )
+            payload = json.dumps(canonical, indent=2).encode("utf-8")
+        elif _is_midi_device_type_relpath(relpath):
+            try:
+                obj = json.loads(payload)
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                return JSONResponse(
+                    {"ok": False, "error": f"core_server_files, file {relpath!r}: device-type body must be JSON"},
+                    status_code=400,
+                )
+            parsed_type = validate_device_type(obj)
+            if parsed_type is None or "notes" in parsed_type:
+                return JSONResponse(
+                    {"ok": False, "error": f"core_server_files, file {relpath!r}: invalid device type"},
+                    status_code=400,
+                )
+            payload = json.dumps(parsed_type, indent=2).encode("utf-8")
+        elif _is_drum_profile_relpath(relpath):
             # INIT-003/SPEC-002 ac-7: never ingest profiles as kits.
             stem = Path(relpath).stem
             try:
@@ -1209,7 +1344,23 @@ def import_settings(bundle: dict):
                     {"ok": False, "error": f"core_server_files, file {relpath!r}: profile body must be JSON"},
                     status_code=400,
                 )
-            canonical, prof_err = validate_profile(obj, stem)
+            canonical, prof_err = validate_profile(
+                obj, stem, config_dir=appstate.config_dir,
+            )
+            if canonical is None:
+                # Dangling device_id vs on-disk: reject unless the device
+                # is also in this bundle (pending_device_ids).
+                retry, _retry_err = validate_profile(obj, stem)
+                device_id = retry.get("device_id") if isinstance(retry, dict) else None
+                if (
+                    retry is not None
+                    and isinstance(device_id, str)
+                    and device_id
+                    and device_id in known_device_ids
+                    and prof_err
+                    and "device_id" in prof_err
+                ):
+                    canonical, prof_err = retry, None
             if canonical is None:
                 return JSONResponse(
                     {"ok": False, "error": f"core_server_files, file {relpath!r}: {prof_err}"},

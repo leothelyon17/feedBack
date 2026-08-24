@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MIDI devices HTTP API and Learn lock (INIT-003/SPEC-009).**
+  `GET /api/midi/device-types` lists catalogs with no default `notes` map.
+  `GET`/`PUT`/`DELETE /api/midi/devices` and `/api/midi/devices/{id}` persist
+  device documents; create-from-type (`POST` or `PUT` without `notes`) yields
+  `notes: {}` even when the matching shipped kit has notes. Atomic
+  `PUT`/`DELETE /api/midi/devices/{id}/notes/{midi}` writes one mapping
+  (`piece_id` must be a catalog trigger; MIDI 0–127). Device note mutations
+  and whole-device `PUT`/`DELETE` return 409 while a highway scoring session
+  is playing or paused (reuses SPEC-002 `scoring_session_blocks_learn`).
+  Deleting the active device is 400 until another is activated. Additive
+  `active_midi_device` on `/api/settings`; activating a drum profile that
+  has `device_id` dual-writes that pointer. Settings export/import splits
+  `midi/devices` vs kits vs profiles vs `midi/device-types`; export emits
+  logical `source_id` only. Overlay-kit migrate runs on `GET /api/midi/devices`.
+  Kit note routes remain.
 - **MIDI device documents (INIT-003/SPEC-008).** Instance records persist at
   `{config_dir}/midi/devices/{id}.json` (`id`, `name`, `source_id`,
   `device_type_id`, `family`, `notes`, `input`). `notes` defaults to `{}`

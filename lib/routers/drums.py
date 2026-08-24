@@ -460,7 +460,7 @@ def get_scoring_session():
 
 def _profile_public(profile: dict) -> dict:
     """Wire form — canonical store document; source_id already logical."""
-    return {
+    out = {
         "id": profile["id"],
         "name": profile.get("name") or profile["id"],
         "kit_id": profile.get("kit_id") or "",
@@ -468,6 +468,10 @@ def _profile_public(profile: dict) -> dict:
         "input": profile.get("input"),
         "highway": profile.get("highway"),
     }
+    device_id = profile.get("device_id")
+    if isinstance(device_id, str) and device_id:
+        out["device_id"] = device_id
+    return out
 
 
 def _active_profile_id() -> str | None:
@@ -500,7 +504,9 @@ def _persist_profile_from_body(body: bytes, profile_id: str | None) -> dict:
         raise HTTPException(status_code=400, detail="profile body contains reserved keys")
     if "notes" in obj:
         raise HTTPException(status_code=400, detail="notes are not allowed on a profile")
-    canonical, err = validate_profile(obj, profile_id)
+    canonical, err = validate_profile(
+        obj, profile_id, config_dir=appstate.config_dir,
+    )
     if canonical is None:
         raise HTTPException(status_code=400, detail=err or "invalid profile")
     _require_known_kit_id(canonical.get("kit_id") or "")

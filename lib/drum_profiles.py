@@ -343,6 +343,7 @@ def apply_active_profile(settings: dict, profile: dict) -> dict:
     """Dual-write active_kit = profile.kit_id onto a settings dict.
 
     Mutates and returns `settings`. Unset kit_id clears active_kit.
+    A set device_id dual-writes active_midi_device (INIT-003/SPEC-009).
     INIT-003/SPEC-001.
     """
     pid = profile.get("id")
@@ -353,6 +354,9 @@ def apply_active_profile(settings: dict, profile: dict) -> dict:
         settings["active_kit"] = kit_id
     else:
         settings.pop("active_kit", None)
+    device_id = profile.get("device_id")
+    if isinstance(device_id, str) and device_id:
+        settings["active_midi_device"] = device_id
     return settings
 
 
