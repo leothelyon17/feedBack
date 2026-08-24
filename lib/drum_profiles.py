@@ -1,7 +1,8 @@
 """Named drum profile documents under {config_dir}/drums/profiles/.
 
-A profile is a session (device + input + highway) that points at a kit.
-Notes stay on the kit — this module has no notes writer. INIT-003/SPEC-001.
+A profile is a session (lanes + highway) that may attach to a MIDI device
+via device_id. Notes stay on the device when attached — this module has no
+notes writer. INIT-003/SPEC-001, INIT-003/SPEC-008.
 """
 
 from __future__ import annotations
@@ -168,11 +169,28 @@ def _normalise_highway(raw: object) -> dict | None:
     return {"2d": two, "3d": three}
 
 
-def validate_profile(obj: object, profile_id: str | None = None) -> tuple[dict | None, str | None]:
+def _device_id_ok(raw: object) -> bool:
+    """Empty / omitted device_id is allowed. A set id must be a slug."""
+    if raw is None:
+        return True
+    if not isinstance(raw, str):
+        return False
+    if raw == "":
+        return True
+    return PROFILE_ID_RE.fullmatch(raw) is not None
+
+
+def validate_profile(
+    obj: object,
+    profile_id: str | None = None,
+    *,
+    config_dir: Path | None = None,
+) -> tuple[dict | None, str | None]:
     """Validate a profile document. Returns (canonical, error).
 
     Rejects notes, owner_id, dangerous keys, bad slugs, and raw MIDI port
-    labels on device.source_id. INIT-003/SPEC-001.
+    labels on device.source_id. Optional device_id must name an existing
+    MIDI device when config_dir is given. INIT-003/SPEC-001, INIT-003/SPEC-008.
     """
     if not isinstance(obj, dict):
         return None, "profile body must be an object"
@@ -195,6 +213,15 @@ def validate_profile(obj: object, profile_id: str | None = None) -> tuple[dict |
         kit_id = ""
     if not _kit_id_ok(kit_id):
         return None, "kit_id must match [a-z0-9-]+ or be empty"
+    device_id = obj.get("device_id", "")
+    if device_id is None:
+        device_id = ""
+    if not _device_id_ok(device_id):
+        return None, "device_id must match [a-z0-9-]+ or be empty"
+    if device_id and config_dir is not None:
+        from midi_devices import load_device
+        if load_device(config_dir, device_id) is None:
+            return None, "device_id does not name an existing device"
     device = _normalise_device(obj.get("device"))
     if device is None:
         return None, "device.source_id must be a logical midi-input id"
@@ -212,10 +239,16 @@ def validate_profile(obj: object, profile_id: str | None = None) -> tuple[dict |
         "input": inp,
         "highway": highway,
     }
+    if device_id:
+        canonical["device_id"] = device_id
     return canonical, None
 
 
-def load_profile_file(data: bytes | str | Path) -> dict | None:
+def load_profile_file(
+    data: bytes | str | Path,
+    *,
+    config_dir: Path | None = None,
+) -> dict | None:
     """Parse one profile JSON document. None on malformed / rejected records."""
     if isinstance(data, Path):
         try:
@@ -235,7 +268,7 @@ def load_profile_file(data: bytes | str | Path) -> dict | None:
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         log.warning("profile: invalid JSON (%s)", exc)
         return None
-    canonical, err = validate_profile(obj)
+    canonical, err = validate_profile(obj, config_dir=config_dir)
     if canonical is None:
         log.warning("profile: rejected (%s)", err)
         return None
@@ -272,7 +305,7 @@ def list_profiles(config_dir: Path) -> list[dict]:
         log.warning("profile: cannot list %s: %s", root, exc)
         return []
     for f in files:
-        parsed = load_profile_file(f)
+        parsed = load_profile_file(f, config_dir=config_dir)
         if parsed is None:
             continue
         out.append(parsed)
@@ -283,12 +316,12 @@ def load_profile(config_dir: Path, profile_id: str) -> dict | None:
     dest = profile_path(config_dir, profile_id)
     if dest is None or not dest.is_file():
         return None
-    return load_profile_file(dest)
+    return load_profile_file(dest, config_dir=config_dir)
 
 
 def save_profile(config_dir: Path, obj: dict, profile_id: str | None = None) -> tuple[dict | None, str | None]:
     """Validate and atomically write a profile. Does not write notes."""
-    canonical, err = validate_profile(obj, profile_id)
+    canonical, err = validate_profile(obj, profile_id, config_dir=config_dir)
     if canonical is None:
         return None, err
     dest = profile_path(config_dir, canonical["id"])
@@ -330,6 +363,23 @@ def activate_profile(config_dir: Path, profile_id: str, settings: dict) -> tuple
         return None, "unknown profile"
     apply_active_profile(settings, parsed)
     return parsed, None
+
+
+def scoring_notes(config_dir: Path, profile: dict) -> dict:
+    """Scoring map SoT: device.notes when device_id is set, else {}.
+
+    Kit notes are not the source of truth in these helpers. Highways
+    switch in INIT-003/SPEC-012 and SPEC-013. INIT-003/SPEC-008.
+    """
+    device_id = profile.get("device_id") if isinstance(profile, dict) else None
+    if not isinstance(device_id, str) or not device_id:
+        return {}
+    from midi_devices import load_device
+    device = load_device(config_dir, device_id)
+    if device is None:
+        return {}
+    notes = device.get("notes")
+    return dict(notes) if isinstance(notes, dict) else {}
 
 
 def _first_shipped_kit_id(shipped_dir: Path | None, user_dir: Path | None) -> str:

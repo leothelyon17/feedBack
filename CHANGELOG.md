@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MIDI device documents (INIT-003/SPEC-008).** Instance records persist at
+  `{config_dir}/midi/devices/{id}.json` (`id`, `name`, `source_id`,
+  `device_type_id`, `family`, `notes`, `input`). `notes` defaults to `{}`
+  and is never seeded from GM or a shipped kit. `device_from_type` always
+  writes empty notes even when `alesis-strata-prime` kit notes exist.
+  Profiles may attach via optional `device_id` (existing device only);
+  profile `notes` stay forbidden. One-time overlay-kit migrate copies user
+  `{config_dir}/drums/*.json` notes into a single device and writes
+  `{config_dir}/midi/overlay-kit-notes-migrated`; shipped kit notes are
+  not copied. Kit glob refuses planted device JSON.
 - **MIDI device-type catalogs (INIT-003/SPEC-007).** Shipped
   `data/midi/device-types/alesis-strata-prime.json` lists Prime pads/zones
   (`family: drums`) with no `notes` map and no default MIDI integers.
