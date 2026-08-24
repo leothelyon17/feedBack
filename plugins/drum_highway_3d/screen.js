@@ -379,14 +379,19 @@
         57: 'crash_r',
     };
 
-    // INIT-001/SPEC-006: consume core vocabulary / active_kit notes read-only.
+    // INIT-001/SPEC-006: consume core vocabulary read-only.
+    // INIT-003/SPEC-013: scoring overlay is the MIDI device map
+    // (feedBack.midiDevices), not GET /api/drums/kits/{id}. Empty notes
+    // mean unmapped — no shipped Prime kit and no GM fallback.
     // Local ALL_PIECES + MIDI_TO_PIECE stay as the offline / old-core fallback
-    // (delete nothing). Payload is untrusted: shape-check ids and midi lists;
-    // ignore unknown keys and prototype-pollution names.
+    // until a device document is consumed. Payload is untrusted: shape-check
+    // ids and midi lists; ignore unknown keys and prototype-pollution names.
     const _PIECE_ID_RE = /^[a-z][a-z0-9_]*$/;
     let _vocabPieceIds = null;     // string[] once a usable vocabulary is applied
     let _vocabMidiMap = null;      // midi→piece overlay from vocabulary GM lists
-    let _kitMidiOverlay = null;    // midi→piece overlay from active_kit.notes
+    let _kitMidiOverlay = null;    // midi→piece overlay (device notes, or kit when no midiDevices)
+    let _deviceNotesLocked = false; // true once a device document (incl. notes:{}) was applied
+    let _attachedDeviceId = null;
 
     function _isSafeKey(key) {
         return typeof key === 'string'
@@ -508,6 +513,8 @@
         _vocabPieceIds = null;
         _vocabMidiMap = null;
         _kitMidiOverlay = null;
+        _deviceNotesLocked = false;
+        _attachedDeviceId = null;
     }
     function _effectivePieceIds() {
         if (_vocabPieceIds && _vocabPieceIds.length) return _vocabPieceIds.slice();
@@ -517,6 +524,9 @@
         const n = _parseMidiNote(midiNote);
         if (n === null) return undefined;
         if (_kitMidiOverlay && _kitMidiOverlay[n] !== undefined) return _kitMidiOverlay[n];
+        // INIT-003/SPEC-013: empty device notes mean unmapped — do not
+        // fall back to shipped Prime kit notes or GM.
+        if (_deviceNotesLocked) return undefined;
         if (_vocabMidiMap && _vocabMidiMap[n] !== undefined) return _vocabMidiMap[n];
         return MIDI_TO_PIECE[n];
     }
@@ -529,27 +539,10 @@
             const body = r && r.ok ? await r.json() : null;
             if (_applyVocabulary(body)) vocabulary = true;
         } catch (_) { /* offline / old core — keep MIDI_TO_PIECE */ }
-        let kitId = null;
-        try {
-            const r = await f('/api/settings');
-            const body = r && r.ok ? await r.json() : null;
-            if (body && typeof body.active_kit === 'string' && body.active_kit) {
-                kitId = body.active_kit;
-            }
-        } catch (_) { /* settings optional */ }
-        if (!kitId) {
-            _applyActiveKitNotes(null);
-            return { vocabulary, activeKit: false };
-        }
-        try {
-            const r = await f('/api/drums/kits/' + encodeURIComponent(kitId));
-            const body = r && r.ok ? await r.json() : null;
-            const activeKit = _applyActiveKitNotes(body);
-            return { vocabulary, activeKit };
-        } catch (_) {
-            _applyActiveKitNotes(null);
-            return { vocabulary, activeKit: false };
-        }
+        // INIT-003/SPEC-013: do not GET /api/drums/kits/{id} as scoring SoT
+        // and do not apply alesis-strata-prime shipped notes as a default map.
+        // Device notes hydrate via _hydrateDeviceNotes / midiDevices.get.
+        return { vocabulary, activeKit: false };
     }
     if (typeof fetch === 'function') {
         _consumeCoreVocabulary();
@@ -1047,6 +1040,93 @@
         return (d && d.version === 1) ? d : null;
     }
 
+    function _midiDevices() {
+        const d = window.feedBack && window.feedBack.midiDevices;
+        return (d && d.version === 1) ? d : null;
+    }
+
+    let _deviceUnsub = null;
+
+    function _notesFromDevice(device) {
+        if (!device || typeof device !== 'object') return {};
+        const notes = device.notes;
+        if (!notes || typeof notes !== 'object' || Array.isArray(notes)) return {};
+        return notes;
+    }
+
+    function _applyDeviceNotes(notes) {
+        const raw = (notes && typeof notes === 'object' && !Array.isArray(notes)) ? notes : {};
+        const overlay = _parseKitNotes({ notes: raw });
+        _kitMidiOverlay = overlay || Object.create(null);
+        _deviceNotesLocked = true;
+    }
+
+    function _attachedDeviceIdFrom(detail) {
+        const dp = _drumProfiles();
+        const active = dp && typeof dp.getActive === 'function' ? dp.getActive() : null;
+        if (active && typeof active.device_id === 'string' && active.device_id) {
+            return String(active.device_id);
+        }
+        if (detail && detail.device_id) return String(detail.device_id);
+        return '';
+    }
+
+    async function _refetchDeviceNotes(deviceId) {
+        const id = deviceId ? String(deviceId) : '';
+        const md = _midiDevices();
+        if (!md || typeof md.get !== 'function') {
+            // Host without midiDevices: leave the kit overlay path alone.
+            return { ok: false, missing: true };
+        }
+        if (!id) {
+            // aud-1: no device_id → empty overlay; never apply shipped Prime notes.
+            _applyDeviceNotes({});
+            _attachedDeviceId = null;
+            return { ok: true, empty: true };
+        }
+        const gen = _beginKitOp();
+        try {
+            const device = await md.get(id);
+            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
+            _applyDeviceNotes(_notesFromDevice(device));
+            _attachedDeviceId = id;
+            return { ok: true, device };
+        } catch (_) {
+            if (_isCurrentKitOp(gen)) {
+                _applyDeviceNotes({});
+                _attachedDeviceId = id;
+            }
+            return { ok: false, error: 'network' };
+        }
+    }
+
+    async function _hydrateDeviceNotes() {
+        _ensureDeviceListeners();
+        return _refetchDeviceNotes(_attachedDeviceIdFrom(null));
+    }
+
+    async function _onMidiDeviceChange(detail) {
+        return _refetchDeviceNotes(_attachedDeviceIdFrom(detail));
+    }
+
+    function _ensureDeviceListeners() {
+        if (_deviceUnsub) return;
+        const md = _midiDevices();
+        if (md && typeof md.subscribe === 'function') {
+            _deviceUnsub = md.subscribe(_onMidiDeviceChange);
+            return;
+        }
+        if (window.feedBack && typeof window.feedBack.on === 'function') {
+            const handler = function (ev) {
+                _onMidiDeviceChange(ev && ev.detail);
+            };
+            window.feedBack.on('feedback:midi-device-change', handler);
+            _deviceUnsub = function () {
+                try { window.feedBack.off('feedback:midi-device-change', handler); } catch (_) {}
+            };
+        }
+    }
+
     function _notifyProfilesUi() {
         try { window.dispatchEvent(new CustomEvent('drum_h3d:profiles')); } catch (_) {}
     }
@@ -1232,7 +1312,9 @@
     function _applyConfirmedKit(kit, kitId) {
         _confirmedKit = kit && typeof kit === 'object' ? kit : null;
         if (kitId) _confirmedKitId = kitId;
-        _applyActiveKitNotes(_confirmedKit);
+        // INIT-003/SPEC-013: once scoring is the device map, kit confirm
+        // must not overwrite it (and must not write drum_h3d_kit_v1).
+        if (!_deviceNotesLocked) _applyActiveKitNotes(_confirmedKit);
         _notifyMappingUi();
     }
 
@@ -1283,6 +1365,7 @@
         if (_mappingUnsub) {
             _hydrateSharedInputSettings();
             _ensureProfileListeners();
+            _ensureDeviceListeners();
             return;
         }
         const di = _drumInput();
@@ -1294,41 +1377,31 @@
         _mappingListenerCount += 1;
         _hydrateSharedInputSettings();
         _ensureProfileListeners();
+        _ensureDeviceListeners();
     }
 
-    // INIT-003/SPEC-006: refetch active_kit.notes when the named profile
-    // changes (parity with 2D). Never PUT notes; kit_id comes from the event.
+    // INIT-003/SPEC-013: refetch the attached device's notes (not kit GET)
+    // when the named profile changes. Never PUT notes.
     async function _onDrumProfileChange(detail) {
-        const kitId = detail && detail.kit_id ? String(detail.kit_id) : '';
         if (detail && detail.profile_id) {
             _selectedProfileId = String(detail.profile_id);
         }
+        if (detail && detail.kit_id) _selectedKitId = String(detail.kit_id);
         _notifyProfilesUi();
-        if (!kitId) {
-            await _hydrateActiveKit();
-            return;
-        }
-        const gen = _beginKitOp();
-        try {
-            const kR = await _doFetch('/api/drums/kits/' + encodeURIComponent(kitId));
-            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
-            if (!kR || !kR.ok) return { ok: false, error: 'refetch failed' };
-            const kit = await kR.json();
-            if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
-            _selectedKitId = kitId;
-            _applyConfirmedKit(kit, kitId);
-            return { ok: true, kit };
-        } catch (_) {
-            return { ok: false, error: 'network' };
-        }
+        _ensureDeviceListeners();
+        return _refetchDeviceNotes(_attachedDeviceIdFrom(detail));
     }
 
     function _ensureProfileListeners() {
-        if (_profileUnsub) return;
+        if (_profileUnsub) {
+            _ensureDeviceListeners();
+            return;
+        }
         const dp = _drumProfiles();
         if (dp && typeof dp.subscribe === 'function') {
             _profileUnsub = dp.subscribe(_onDrumProfileChange);
             _profileListenerCount += 1;
+            _ensureDeviceListeners();
             return;
         }
         if (window.feedBack && typeof window.feedBack.on === 'function') {
@@ -1341,6 +1414,7 @@
             };
             _profileListenerCount += 1;
         }
+        _ensureDeviceListeners();
     }
 
     async function _hydrateProfiles() {
@@ -1376,6 +1450,11 @@
 
     async function _hydrateActiveKit() {
         _ensureMappingListeners();
+        // INIT-003/SPEC-013: scoring overlay is the MIDI device map when
+        // midiDevices is present. Kit GET stays only for hosts without it.
+        if (_midiDevices()) {
+            return _hydrateDeviceNotes();
+        }
         const gen = _beginKitOp();
         try {
             const listR = await _doFetch('/api/drums/kits');
@@ -1678,8 +1757,12 @@
         return true;
     };
     // Subscribe once the mapping/profile helpers exist so a profile
-    // switch refetches notes even if Settings never opened.
-    try { _ensureProfileListeners(); } catch (_) { /* accessor may load later */ }
+    // or MIDI-device switch refetches notes even if Settings never opened.
+    try {
+        _ensureProfileListeners();
+        _ensureDeviceListeners();
+        _hydrateDeviceNotes();
+    } catch (_) { /* accessor may load later */ }
 
     window.drumH3dActivateProfile = async function () {
         const dp = _drumProfiles();
@@ -4695,6 +4778,15 @@
         _midiToPiece,
         _consumeCoreVocabulary,
         _readKitConfig,
+        // INIT-003/SPEC-013: MIDI device notes consume seams (vm tests).
+        _applyDeviceNotes,
+        _refetchDeviceNotes,
+        _hydrateDeviceNotes,
+        _onMidiDeviceChange,
+        _ensureDeviceListeners,
+        _attachedDeviceIdFrom,
+        get _deviceNotesLocked() { return _deviceNotesLocked; },
+        get _attachedDeviceId() { return _attachedDeviceId; },
         // INIT-002/SPEC-004 mapping editor seams (vm tests).
         _beginKitOp,
         _isCurrentKitOp,
@@ -4779,6 +4871,8 @@
             };
             _profileList = [];
             _selectedProfileId = null;
+            _deviceNotesLocked = false;
+            _attachedDeviceId = null;
             _applyActiveKitNotes(null);
         },
     };

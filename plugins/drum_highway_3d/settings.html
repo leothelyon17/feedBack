@@ -2,18 +2,18 @@
     <h3 id="drumh3d-heading" class="text-sm font-medium text-gray-400 mb-2">3D Drum Highway</h3>
     <p class="text-xs text-gray-500 mb-3">
         Pick a song with a drum tab (sloppak-spec §5.3), choose <em>3D
-        Drum Highway</em> from the viz picker. MIDI kit mapping and the
-        drum profile switcher are shared with the 2D highway. Bloom,
-        camera, and theme live on the Graphics tab.
+        Drum Highway</em> from the viz picker. The drum profile switcher
+        is shared with the 2D highway. MIDI device mapping lives on the
+        MIDI tab. Bloom, camera, and theme live on the Graphics tab.
     </p>
 
     <!-- Drum profile switcher (INIT-003/SPEC-006) -->
     <div class="mt-3">
         <h4 id="drumh3d-profile-heading" class="text-xs font-medium text-gray-300 mb-2">Drum profile</h4>
         <p class="text-xs text-gray-500 mb-3">
-            Named session (kit + input). Switching a profile refetches
-            that kit's MIDI notes. Two drums panels may both switch the
-            same active profile.
+            Named session (device + highway). Switching a profile
+            refetches that device's MIDI notes. Two drums panels may both
+            switch the same active profile.
         </p>
         <p id="drumh3d-profile-active" class="text-xs text-gray-400 mb-2" aria-live="polite">
             No profile active.
@@ -32,110 +32,14 @@
         </div>
     </div>
 
-    <!-- MIDI input -->
-    <div class="mt-6 border-t border-gray-800 pt-4">
-        <h4 class="text-xs font-medium text-gray-300 mb-2">MIDI input</h4>
-        <label for="drumh3d-midi-input" class="text-xs font-medium text-gray-400 mb-1 block">Device</label>
-        <select id="drumh3d-midi-input"
-            onchange="window.drumH3dSetMidiInput && window.drumH3dSetMidiInput(this.value)"
-            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 outline-none">
-            <option value="">— none —</option>
-        </select>
-        <p class="text-xs text-gray-500 mt-1">
-            Auto-picks the first non-passthrough input on load when a source
-            is enabled. Pick "none" to disconnect; the source stays disabled
-            until you select a device.
-        </p>
-
-        <label for="drumh3d-midi-channel" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">MIDI channel</label>
-        <select id="drumh3d-midi-channel"
-            onchange="window.drumH3dSetMidiChannel && window.drumH3dSetMidiChannel(this.value)"
-            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 outline-none">
-            <option value="-1">All</option>
-            <option value="9">10 (Drums)</option>
-            <option value="0">1</option>
-            <option value="1">2</option>
-            <option value="2">3</option>
-            <option value="3">4</option>
-            <option value="4">5</option>
-            <option value="5">6</option>
-            <option value="6">7</option>
-            <option value="7">8</option>
-            <option value="8">9</option>
-            <option value="10">11</option>
-            <option value="11">12</option>
-            <option value="12">13</option>
-            <option value="13">14</option>
-            <option value="14">15</option>
-            <option value="15">16</option>
-        </select>
-        <p class="text-xs text-gray-500 mt-1">
-            Filter live MIDI note-on by channel. All accepts every channel.
-        </p>
-
-        <label for="drumh3d-hit-detect" class="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-3">
-            <input type="checkbox" id="drumh3d-hit-detect"
-                onchange="window.drumH3dSetHitDetection && window.drumH3dSetHitDetection(this.checked)">
-            Hit detection
-        </label>
-        <p class="text-xs text-gray-500 mt-1">
-            Score pad hits against the chart. Off keeps the device connected
-            and still sounds the kit.
-        </p>
-
-        <label for="drumh3d-synth-vol" class="text-xs font-medium text-gray-400 mb-1 mt-3 block">
-            Kit volume <span id="drumh3d-synth-vol-val" class="text-gray-500 font-mono">0.70</span>
-        </label>
-        <input type="range" id="drumh3d-synth-vol"
-            min="0" max="1" step="0.01" value="0.7"
-            oninput="window.drumH3dSetSynthVolume && window.drumH3dSetSynthVolume(this.value); document.getElementById('drumh3d-synth-vol-val').textContent = parseFloat(this.value).toFixed(2)"
-            class="w-full">
-    </div>
-
-    <!-- MIDI kit mapping (INIT-002/SPEC-004) — core active kit, not lane layout -->
-    <div class="mt-6 border-t border-gray-800 pt-4">
-        <h4 id="drumh3d-map-heading" class="text-xs font-medium text-gray-300 mb-2">MIDI kit mapping</h4>
-        <p class="text-xs text-gray-500 mb-3">
-            Maps your e-kit MIDI notes onto drum pieces. This is shared
-            with the 2D highway. It is not the 3D lane layout — changing
-            mapping never reorders lanes. Select a kit, then confirm with
-            <strong class="font-medium text-gray-400">Use this kit</strong>
-            before Learn, edit, or remove can run.
-        </p>
-        <p id="drumh3d-map-active" class="text-xs text-gray-400 mb-2" aria-live="polite">
-            No kit confirmed — mapping edits are disabled.
-        </p>
-        <label for="drumh3d-core-kit" class="text-xs font-medium text-gray-400 mb-1 block">Kit</label>
-        <div class="flex flex-wrap items-center gap-2 mb-3">
-            <select id="drumh3d-core-kit"
-                class="flex-1 bg-dark-700 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 outline-none">
-                <option value="">— select a kit —</option>
-            </select>
-            <button type="button" id="drumh3d-use-kit"
-                class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded-lg text-xs"
-                disabled>
-                Use this kit
-            </button>
-        </div>
-        <div id="drumh3d-map-rows" class="space-y-1 mb-2" role="list" aria-labelledby="drumh3d-map-heading"></div>
-        <div class="flex flex-wrap items-center gap-2 mt-2">
-            <button type="button" id="drumh3d-map-undo"
-                class="px-3 py-1.5 bg-dark-600 hover:bg-dark-500 rounded-lg text-xs"
-                disabled>
-                Undo
-            </button>
-            <span id="drumh3d-map-status" class="text-xs text-gray-500 ml-auto"
-                role="status" aria-live="polite" aria-atomic="true"></span>
-        </div>
-    </div>
-
     <!-- 3D lane layout (visual only — drum_h3d_kit_v1) -->
     <div class="mt-6 border-t border-gray-800 pt-4">
         <h4 class="text-xs font-medium text-gray-300 mb-2">3D lane layout</h4>
         <p class="text-xs text-gray-500 mb-3">
             Visual only: add the pieces you actually have, in the order
             you want them on this highway (left → right). This does not
-            change MIDI kit mapping. The default fallback routing covers
+            change the MIDI device map (that lives on the MIDI tab). The
+            default fallback routing covers
             most common kit setups; use the fallbacks panel below to
             reroute any chart piece to a different lane, or set it to "—"
             to silently drop it.
@@ -193,7 +97,9 @@
 
     <script>
     (function () {
-        // INIT-003/SPEC-006: Drums-tab fragment (mapping / profile / MIDI / visual lanes).
+        // INIT-003/SPEC-013: Drums-tab fragment (profile + visual lanes).
+        // MIDI device picker, channel knobs, and mapping table live on the
+        // MIDI tab — 3D only consumes device.notes.
 
         const FRIENDLY = {
             kick: 'Kick',
@@ -368,147 +274,6 @@
 
         window.addEventListener('drum_h3d:kit', () => renderKit());
 
-        function el(tag, className, text) {
-            const node = document.createElement(tag);
-            if (className) node.className = className;
-            if (text != null) node.textContent = text;
-            return node;
-        }
-
-        function renderMapping() {
-            const status = window.drumH3dGetCoreKitStatus
-                ? window.drumH3dGetCoreKitStatus()
-                : { selectedId: '', confirmedId: '', confirmedName: '', canMutate: false, learnPiece: null, undoAvailable: false, status: { message: '', kind: '' } };
-            const kits = window.drumH3dListCoreKits ? window.drumH3dListCoreKits() : [];
-            const sel = document.getElementById('drumh3d-core-kit');
-            const useBtn = document.getElementById('drumh3d-use-kit');
-            const undoBtn = document.getElementById('drumh3d-map-undo');
-            const activeEl = document.getElementById('drumh3d-map-active');
-            const statusEl = document.getElementById('drumh3d-map-status');
-            const rowsEl = document.getElementById('drumh3d-map-rows');
-            if (!sel || !rowsEl) return;
-
-            const prev = sel.value;
-            sel.textContent = '';
-            const none = document.createElement('option');
-            none.value = '';
-            none.textContent = '— select a kit —';
-            sel.appendChild(none);
-            for (let i = 0; i < kits.length; i++) {
-                const kit = kits[i];
-                if (!kit || !kit.id) continue;
-                const opt = document.createElement('option');
-                opt.value = String(kit.id);
-                opt.textContent = kit.name ? String(kit.name) : String(kit.id);
-                sel.appendChild(opt);
-            }
-            const selected = status.selectedId || prev || '';
-            if (selected && Array.from(sel.options).some((o) => o.value === selected)) sel.value = selected;
-
-            const canConfirm = !!(sel.value && sel.value !== status.confirmedId);
-            if (useBtn) {
-                useBtn.disabled = !canConfirm;
-                useBtn.setAttribute('aria-disabled', canConfirm ? 'false' : 'true');
-            }
-            if (undoBtn) {
-                undoBtn.disabled = !status.undoAvailable;
-                undoBtn.setAttribute('aria-disabled', status.undoAvailable ? 'false' : 'true');
-            }
-            if (activeEl) {
-                activeEl.textContent = status.confirmedId
-                    ? ('Active kit: ' + (status.confirmedName || status.confirmedId))
-                    : 'No kit confirmed — mapping edits are disabled.';
-            }
-            if (statusEl) {
-                statusEl.textContent = (status.status && status.status.message) || '';
-                statusEl.className = 'text-xs ml-auto ' + (
-                    status.status && status.status.kind === 'err' ? 'text-red-400'
-                    : status.status && status.status.kind === 'ok' ? 'text-emerald-400'
-                    : 'text-gray-500'
-                );
-            }
-
-            const rows = window.drumH3dGetMappingRows ? window.drumH3dGetMappingRows() : [];
-            rowsEl.textContent = '';
-            const canMutate = !!status.canMutate;
-            for (let i = 0; i < rows.length; i++) {
-                const row = rows[i];
-                const wrap = el('div', 'flex items-center gap-2 px-2 py-1 bg-dark-700/60 rounded');
-                wrap.setAttribute('role', 'listitem');
-                wrap.appendChild(el('span', 'flex-1 text-xs text-gray-300', row.label || row.pieceId));
-
-                const chips = el('div', 'flex flex-wrap items-center gap-1');
-                const custom = row.customNotes || [];
-                const gm = row.gmNotes || [];
-                if (row.unmapped) {
-                    chips.appendChild(el('span', 'text-xs text-gray-600', 'Unmapped'));
-                }
-                for (let c = 0; c < custom.length; c++) {
-                    const note = custom[c];
-                    const chip = el('span', 'flex items-center gap-1 px-2 py-0.5 bg-dark-600 rounded text-xs text-gray-300');
-                    chip.appendChild(document.createTextNode(String(note)));
-                    const rm = el('button', 'px-1.5 py-0.5 text-xs text-red-400 hover:text-red-300');
-                    rm.type = 'button';
-                    rm.textContent = '×';
-                    rm.disabled = !canMutate;
-                    rm.setAttribute('aria-label', 'Remove MIDI note ' + note + ' from ' + (row.label || row.pieceId));
-                    rm.addEventListener('click', function () {
-                        if (window.drumH3dRemoveNoteMapping) window.drumH3dRemoveNoteMapping(note);
-                    });
-                    chip.appendChild(rm);
-                    chips.appendChild(chip);
-                }
-                for (let g = 0; g < gm.length; g++) {
-                    const note = gm[g];
-                    const chip = el('span', 'px-2 py-0.5 bg-dark-700 border border-gray-800 rounded text-xs text-gray-500');
-                    chip.textContent = String(note) + ' GM';
-                    chip.title = 'GM default — not a custom mapping';
-                    chips.appendChild(chip);
-                }
-                wrap.appendChild(chips);
-
-                const learn = el('button', 'px-1.5 py-0.5 text-xs text-gray-400 hover:text-white');
-                learn.type = 'button';
-                const pending = status.learnPiece === row.pieceId;
-                learn.textContent = pending ? '...' : 'Learn';
-                learn.disabled = !canMutate;
-                learn.setAttribute('aria-label', (pending ? 'Cancel learn for ' : 'Learn MIDI note for ') + (row.label || row.pieceId));
-                learn.addEventListener('click', function () {
-                    if (window.drumH3dLearnPiece) window.drumH3dLearnPiece(row.pieceId);
-                });
-                wrap.appendChild(learn);
-                rowsEl.appendChild(wrap);
-            }
-        }
-
-        const coreSel = document.getElementById('drumh3d-core-kit');
-        if (coreSel) {
-            coreSel.addEventListener('change', function () {
-                if (window.drumH3dSelectCoreKit) window.drumH3dSelectCoreKit(this.value);
-            });
-        }
-        const useBtn = document.getElementById('drumh3d-use-kit');
-        if (useBtn) {
-            useBtn.addEventListener('click', function () {
-                if (window.drumH3dConfirmCoreKit) window.drumH3dConfirmCoreKit();
-            });
-        }
-        const undoBtn = document.getElementById('drumh3d-map-undo');
-        if (undoBtn) {
-            undoBtn.addEventListener('click', function () {
-                if (window.drumH3dUndoLastRemove) window.drumH3dUndoLastRemove();
-            });
-        }
-        window.addEventListener('drum_h3d:mapping', renderMapping);
-        (function pollMapping() {
-            if (window.drumH3dEnsureMappingInit) {
-                Promise.resolve(window.drumH3dEnsureMappingInit()).then(renderMapping);
-                renderMapping();
-            } else {
-                setTimeout(pollMapping, 100);
-            }
-        })();
-
         function renderProfiles() {
             const status = window.drumH3dGetProfileStatus
                 ? window.drumH3dGetProfileStatus()
@@ -565,45 +330,6 @@
                 renderProfiles();
             } else {
                 setTimeout(pollProfiles, 100);
-            }
-        })();
-
-        function renderMidiPicker() {
-            const sel = document.getElementById('drumh3d-midi-input');
-            if (!sel) return;
-            const inputs = window.drumH3dListMidiInputs ? window.drumH3dListMidiInputs() : [];
-            const current = window.drumH3dGetMidiInputId ? window.drumH3dGetMidiInputId() : '';
-            sel.textContent = '';
-            const none = document.createElement('option');
-            none.value = '';
-            none.textContent = '— none —';
-            sel.appendChild(none);
-            for (const inp of inputs) {
-                const opt = document.createElement('option');
-                opt.value = inp.id;
-                opt.textContent = inp.name;
-                if (inp.id === current) opt.selected = true;
-                sel.appendChild(opt);
-            }
-            const vol = window.drumH3dGetSynthVolume ? window.drumH3dGetSynthVolume() : 0.7;
-            const volSlider = document.getElementById('drumh3d-synth-vol');
-            const volLabel = document.getElementById('drumh3d-synth-vol-val');
-            if (volSlider) volSlider.value = String(vol);
-            if (volLabel) volLabel.textContent = parseFloat(vol).toFixed(2);
-
-            const chSel = document.getElementById('drumh3d-midi-channel');
-            if (chSel && window.drumH3dGetMidiChannel) chSel.value = String(window.drumH3dGetMidiChannel());
-            const hits = document.getElementById('drumh3d-hit-detect');
-            if (hits && window.drumH3dGetHitDetection) hits.checked = !!window.drumH3dGetHitDetection();
-        }
-        window.addEventListener('drum_h3d:midi_devices', renderMidiPicker);
-        window.addEventListener('drum_h3d:input', renderMidiPicker);
-        (function pollMidi() {
-            if (window.drumH3dEnsureMidiInit) {
-                Promise.resolve(window.drumH3dEnsureMidiInit()).then(renderMidiPicker);
-                renderMidiPicker();
-            } else {
-                setTimeout(pollMidi, 100);
             }
         })();
 

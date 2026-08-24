@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **3D consumes MIDI device map (INIT-003/SPEC-013).** Bundled
+  `drum_highway_3d` scores from the attached MIDI device's `notes` via
+  `feedBack.midiDevices.get(profile.device_id)` on
+  `feedback:drum-profile-change` and `feedback:midi-device-change`. Empty
+  `notes: {}` stays unmapped — no Alesis Strata Prime shipped kit and no
+  GM fallback. MIDI device picker, channel knobs, and the mapping table
+  are gone from the 3D Drums settings fragment; bloom/camera/theme stay
+  on Graphics. `drum_h3d_kit_v1` remains visual-only lanes.
 - **MIDI devices panel and accessor (INIT-003/SPEC-011).** Settings → MIDI
   is a working core panel: pick a detected `midiInput` source by label
   (persist `source_id` as the logical key), choose a device type from

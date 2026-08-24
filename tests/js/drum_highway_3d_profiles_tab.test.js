@@ -52,8 +52,8 @@ function makeDrumInput() {
 
 function makeDrumProfiles(opts) {
     const profiles = (opts && opts.profiles) || [
-        { id: 'living-room', name: 'Living room', kit_id: 'kit-living' },
-        { id: 'practice', name: 'Practice', kit_id: 'kit-practice' },
+        { id: 'living-room', name: 'Living room', kit_id: 'kit-living', device_id: 'living-ekit' },
+        { id: 'practice', name: 'Practice', kit_id: 'kit-practice', device_id: 'practice-ekit' },
     ];
     let activeId = (opts && opts.activeId) || 'living-room';
     const saves = [];
@@ -79,10 +79,15 @@ function makeDrumProfiles(opts) {
         async activate(id) {
             activates.push(id);
             activeId = id;
-            const p = profiles.find((x) => x.id === id) || { id, kit_id: '' };
-            const detail = { version: 1, profile_id: id, kit_id: p.kit_id || '' };
+            const p = profiles.find((x) => x.id === id) || { id, kit_id: '', device_id: '' };
+            const detail = {
+                version: 1,
+                profile_id: id,
+                kit_id: p.kit_id || '',
+                device_id: p.device_id || '',
+            };
             for (const fn of subs.slice()) fn(detail);
-            return { profile_id: id, kit_id: p.kit_id || '', profile: p, detail };
+            return { profile_id: id, kit_id: p.kit_id || '', device_id: p.device_id || '', profile: p, detail };
         },
         subscribe(fn) {
             if (typeof fn !== 'function') return function noop() {};
@@ -99,24 +104,67 @@ function makeDrumProfiles(opts) {
     return api;
 }
 
+function makeMidiDevices(opts) {
+    const devices = Object.assign({}, (opts && opts.devices) || {});
+    const gets = [];
+    const subs = [];
+    const api = {
+        version: 1,
+        EVENT: 'feedback:midi-device-change',
+        async get(id) {
+            gets.push(String(id));
+            const d = devices[id];
+            if (!d) {
+                const err = new Error('missing device');
+                throw err;
+            }
+            return { id: d.id, notes: Object.assign({}, d.notes || {}) };
+        },
+        getActive() {
+            const id = opts && opts.activeId;
+            return id && devices[id] ? devices[id] : null;
+        },
+        subscribe(fn) {
+            if (typeof fn !== 'function') return function noop() {};
+            subs.push(fn);
+            return function unsub() {
+                const i = subs.indexOf(fn);
+                if (i >= 0) subs.splice(i, 1);
+            };
+        },
+        _gets: gets,
+        _subs: subs,
+        _setNotes(id, notes) {
+            devices[id] = Object.assign({}, devices[id] || { id }, { notes: Object.assign({}, notes) });
+        },
+        _emit(detail) { for (const fn of subs.slice()) fn(detail); },
+    };
+    return api;
+}
+
 function load(opts) {
     const store = (opts && opts.store) || {};
     const drumInput = (opts && opts.drumInput) || makeDrumInput();
     const drumProfiles = Object.prototype.hasOwnProperty.call(opts || {}, 'drumProfiles')
         ? opts.drumProfiles
         : makeDrumProfiles();
+    const midiDevices = Object.prototype.hasOwnProperty.call(opts || {}, 'midiDevices')
+        ? opts.midiDevices
+        : null;
     const bus = [];
+    const feedBack = {
+        drumInput,
+        drumProfiles,
+        emit(name, detail) { bus.push({ name, detail }); },
+        on() {},
+        off() {},
+    };
+    if (midiDevices) feedBack.midiDevices = midiDevices;
     const window = {
         console,
         location: { protocol: 'http:', host: 'localhost' },
         slopsmith: {},
-        feedBack: {
-            drumInput,
-            drumProfiles,
-            emit(name, detail) { bus.push({ name, detail }); },
-            on() {},
-            off() {},
-        },
+        feedBack,
         localStorage: {
             getItem(k) {
                 return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
@@ -140,6 +188,7 @@ function load(opts) {
         store,
         drumInput,
         drumProfiles,
+        midiDevices,
         bus,
         __test: window.slopsmithViz_drum_highway_3d.__test,
     };
@@ -260,19 +309,22 @@ test('ac-2: graphics fragment keeps bloom, camera, theme, cinematic', () => {
     assert.match(html, /id="drumh3d-palette"/);
 });
 
-test('ac-3: mapping / kit / profile switcher live on drums settings.html, not graphics', () => {
+test('ac-3: mapping table and MIDI knobs are gone from drums settings; profile switcher stays', () => {
     const drums = fs.readFileSync(SETTINGS, 'utf8');
     const gfx = fs.readFileSync(GRAPHICS, 'utf8');
     assert.match(drums, /data-drumh3d-fragment="drums"/);
-    assert.match(drums, /id="drumh3d-core-kit"/);
-    assert.match(drums, /id="drumh3d-use-kit"/);
     assert.match(drums, /id="drumh3d-profile"/);
     assert.match(drums, /id="drumh3d-use-profile"/);
-    assert.match(drums, /MIDI kit mapping/);
+    assert.match(drums, /3D lane layout/);
+    assert.doesNotMatch(drums, /id="drumh3d-core-kit"/);
+    assert.doesNotMatch(drums, /id="drumh3d-use-kit"/);
+    assert.doesNotMatch(drums, /id="drumh3d-map-rows"/);
+    assert.doesNotMatch(drums, /MIDI kit mapping/);
+    assert.doesNotMatch(drums, /id="drumh3d-midi-input"/);
+    assert.doesNotMatch(drums, /id="drumh3d-midi-channel"/);
+    assert.doesNotMatch(drums, /id="drumh3d-hit-detect"/);
     assert.doesNotMatch(gfx, /id="drumh3d-core-kit"/);
-    assert.doesNotMatch(gfx, /id="drumh3d-use-kit"/);
     assert.doesNotMatch(gfx, /id="drumh3d-profile"/);
-    assert.doesNotMatch(gfx, /id="drumh3d-use-profile"/);
     assert.doesNotMatch(gfx, /MIDI kit mapping/);
     assert.doesNotMatch(drums, /id="drumh3d-fx-bloom"/);
     assert.doesNotMatch(drums, /id="drumh3d-camera"/);
@@ -382,20 +434,23 @@ test('ac-4: visual drum_h3d_kit_v1 lanes stay dual-read and are not the mapping 
         fallbacks: { hh_open: 'hh_closed' },
     };
     const store = { drum_h3d_kit_v1: JSON.stringify(custom) };
-    const ctx = load({ store });
-    const before = store.drum_h3d_kit_v1;
-    installFetch(ctx, (url, opts) => {
-        const method = (opts && opts.method) || 'GET';
-        if (method === 'GET' && url === '/api/drums/kits') return jsonOk({ kits: [kitDoc('kit-living')] });
-        if (method === 'GET' && url === '/api/settings') return jsonOk({ active_kit: 'kit-living' });
-        if (method === 'GET' && url === '/api/drums/kits/kit-living') return jsonOk(kitDoc('kit-living', { 24: 'kick' }));
-        return jsonFail();
+    const md = makeMidiDevices({
+        devices: { 'living-ekit': { id: 'living-ekit', notes: { 24: 'kick' } } },
     });
-    await ctx.window.drumH3dEnsureMappingInit();
+    const dp = makeDrumProfiles({
+        profiles: [
+            { id: 'living-room', name: 'Living room', kit_id: 'kit-living', device_id: 'living-ekit' },
+        ],
+        activeId: 'living-room',
+    });
+    const ctx = load({ store, drumProfiles: dp, midiDevices: md });
+    const before = store.drum_h3d_kit_v1;
+    await ctx.__test._hydrateDeviceNotes();
     assert.equal(store.drum_h3d_kit_v1, before);
     const visual = ctx.window.drumH3dGetKit();
     assert.equal(visual.name, 'User 3-piece');
     assert.equal(ctx.__test._midiToPiece(24), 'kick');
+    assert.equal(md._gets.includes('living-ekit'), true);
 });
 
 test('ac-4: activate profile never PUTs notes and uses logical profile ids', async () => {
@@ -415,46 +470,45 @@ test('ac-4: settings markup does not persist raw device labels into a profile PU
     const drums = fs.readFileSync(SETTINGS, 'utf8');
     const screen = fs.readFileSync(SCREEN, 'utf8');
     assert.doesNotMatch(drums, /innerHTML = inp\.name/);
-    assert.match(drums, /opt\.textContent = inp\.name/);
+    assert.doesNotMatch(drums, /id="drumh3d-midi-input"/);
     assert.doesNotMatch(screen, /drumProfiles\.save\([^)]*notes/);
     assert.match(screen, /never notes/);
 });
 
 // ── ac-5: profile-change refetches notes ───────────────────────────────
 
-test('ac-5: feedback:drum-profile-change refetches active_kit.notes', async () => {
+test('ac-5: feedback:drum-profile-change refetches attached device notes, not kit GET', async () => {
+    const md = makeMidiDevices({
+        devices: {
+            'living-ekit': { id: 'living-ekit', notes: { 36: 'kick' } },
+            'practice-ekit': { id: 'practice-ekit', notes: { 38: 'snare', 42: 'hh_closed' } },
+        },
+    });
     const dp = makeDrumProfiles({
         profiles: [
-            { id: 'living-room', name: 'Living room', kit_id: 'kit-living' },
-            { id: 'practice', name: 'Practice', kit_id: 'kit-practice' },
+            { id: 'living-room', name: 'Living room', kit_id: 'kit-living', device_id: 'living-ekit' },
+            { id: 'practice', name: 'Practice', kit_id: 'kit-practice', device_id: 'practice-ekit' },
         ],
         activeId: 'living-room',
     });
-    const ctx = load({ drumProfiles: dp });
-    const calls = installFetch(ctx, (url, opts) => {
-        const method = (opts && opts.method) || 'GET';
-        if (method === 'GET' && url === '/api/drums/kits') {
-            return jsonOk({ kits: [kitDoc('kit-living'), kitDoc('kit-practice')] });
-        }
-        if (method === 'GET' && url === '/api/settings') return jsonOk({ active_kit: 'kit-living' });
-        if (method === 'GET' && url === '/api/drums/kits/kit-living') {
-            return jsonOk(kitDoc('kit-living', { 36: 'kick' }));
-        }
-        if (method === 'GET' && url === '/api/drums/kits/kit-practice') {
-            return jsonOk(kitDoc('kit-practice', { 38: 'snare', 42: 'hh_closed' }));
+    const ctx = load({ drumProfiles: dp, midiDevices: md });
+    const calls = installFetch(ctx, (url) => {
+        if (String(url).startsWith('/api/drums/kits')) {
+            return jsonOk({ error: 'kit GET must not be scoring SoT' });
         }
         return jsonFail();
     });
-    await ctx.window.drumH3dEnsureMappingInit();
+    await ctx.__test._hydrateDeviceNotes();
     assert.equal(ctx.__test._midiToPiece(36), 'kick');
-    const before = calls.filter((c) => c.url === '/api/drums/kits/kit-practice').length;
+    const before = md._gets.filter((id) => id === 'practice-ekit').length;
     await dp.activate('practice');
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
-    assert.ok(calls.filter((c) => c.url === '/api/drums/kits/kit-practice').length > before);
+    assert.ok(md._gets.filter((id) => id === 'practice-ekit').length > before);
     assert.equal(ctx.__test._midiToPiece(38), 'snare');
     assert.equal(ctx.__test._midiToPiece(42), 'hh_closed');
-    assert.equal(ctx.window.drumH3dGetCoreKitStatus().confirmedId, 'kit-practice');
+    assert.equal(ctx.__test._midiToPiece(36), undefined);
+    assert.equal(calls.some((c) => /\/api\/drums\/kits\//.test(c.url)), false);
 });
 
 test('ac-5: screen.js subscribes via drumProfiles.subscribe or the shared bus', () => {
@@ -462,4 +516,110 @@ test('ac-5: screen.js subscribes via drumProfiles.subscribe or the shared bus', 
     assert.match(src, /feedback:drum-profile-change/);
     assert.match(src, /function _onDrumProfileChange/);
     assert.match(src, /dp\.subscribe\(_onDrumProfileChange\)/);
+    assert.match(src, /feedback:midi-device-change/);
+    assert.match(src, /function _onMidiDeviceChange/);
+    assert.match(src, /_midiDevices\(\)/);
+    assert.match(src, /md\.get\(/);
+});
+
+test('ac-1: feedback:midi-device-change refetches attached device notes', async () => {
+    const md = makeMidiDevices({
+        devices: {
+            'living-ekit': { id: 'living-ekit', notes: { 36: 'kick' } },
+        },
+    });
+    const dp = makeDrumProfiles({
+        profiles: [
+            { id: 'living-room', name: 'Living room', kit_id: 'kit-living', device_id: 'living-ekit' },
+        ],
+        activeId: 'living-room',
+    });
+    const ctx = load({ drumProfiles: dp, midiDevices: md });
+    await ctx.__test._hydrateDeviceNotes();
+    assert.equal(ctx.__test._midiToPiece(36), 'kick');
+    md._setNotes('living-ekit', { 41: 'tom_low' });
+    md._emit({ device_id: 'living-ekit' });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    assert.equal(ctx.__test._midiToPiece(41), 'tom_low');
+    assert.equal(ctx.__test._midiToPiece(36), undefined);
+});
+
+test('ac-2: empty device notes do not apply Prime kit notes or GM', async () => {
+    const md = makeMidiDevices({
+        devices: {
+            'bare-ekit': { id: 'bare-ekit', notes: {} },
+        },
+    });
+    const dp = makeDrumProfiles({
+        profiles: [
+            { id: 'living-room', name: 'Living room', kit_id: 'alesis-strata-prime', device_id: 'bare-ekit' },
+        ],
+        activeId: 'living-room',
+    });
+    const ctx = load({ drumProfiles: dp, midiDevices: md });
+    const calls = installFetch(ctx, (url) => {
+        if (String(url).includes('alesis-strata-prime') || String(url).startsWith('/api/drums/kits')) {
+            return jsonOk({
+                id: 'alesis-strata-prime',
+                notes: { 36: 'kick', 38: 'snare' },
+                source: 'shipped',
+            });
+        }
+        return jsonFail();
+    });
+    await ctx.__test._hydrateDeviceNotes();
+    assert.equal(ctx.__test._deviceNotesLocked, true);
+    assert.equal(ctx.__test._midiToPiece(36), undefined);
+    assert.equal(ctx.__test._midiToPiece(38), undefined);
+    assert.equal(ctx.__test._midiToPiece(42), undefined);
+    assert.equal(calls.some((c) => /alesis-strata-prime/.test(c.url)), false);
+});
+
+test('ac-2: profile with empty device_id prefers empty overlay (no Prime default)', async () => {
+    const md = makeMidiDevices({ devices: {} });
+    const dp = makeDrumProfiles({
+        profiles: [
+            { id: 'living-room', name: 'Living room', kit_id: 'alesis-strata-prime', device_id: '' },
+        ],
+        activeId: 'living-room',
+    });
+    const ctx = load({ drumProfiles: dp, midiDevices: md });
+    installFetch(ctx, (url) => {
+        if (String(url).includes('alesis-strata-prime')) {
+            return jsonOk({ id: 'alesis-strata-prime', notes: { 36: 'kick' } });
+        }
+        return jsonFail();
+    });
+    await ctx.__test._hydrateDeviceNotes();
+    assert.equal(ctx.__test._deviceNotesLocked, true);
+    assert.equal(ctx.__test._midiToPiece(36), undefined);
+    assert.equal(ctx.__test._midiToPiece(38), undefined);
+});
+
+test('ac-5: device consume does not write drum_h3d_kit_v1', async () => {
+    const custom = {
+        version: 1,
+        name: 'User 3-piece',
+        lanes: [{ piece: 'kick' }],
+        fallbacks: {},
+    };
+    const store = { drum_h3d_kit_v1: JSON.stringify(custom) };
+    const md = makeMidiDevices({
+        devices: { 'living-ekit': { id: 'living-ekit', notes: { 24: 'kick' } } },
+    });
+    const dp = makeDrumProfiles({
+        profiles: [{ id: 'living-room', name: 'Living room', device_id: 'living-ekit' }],
+        activeId: 'living-room',
+    });
+    const ctx = load({ store, drumProfiles: dp, midiDevices: md });
+    const before = store.drum_h3d_kit_v1;
+    await ctx.__test._hydrateDeviceNotes();
+    md._setNotes('living-ekit', { 38: 'snare' });
+    md._emit({ device_id: 'living-ekit' });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(store.drum_h3d_kit_v1, before);
+    assert.equal(ctx.window.drumH3dGetKit().name, 'User 3-piece');
+    assert.equal(ctx.__test._midiToPiece(38), 'snare');
+    assert.equal(ctx.__test._midiToPiece(24), undefined);
 });
