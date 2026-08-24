@@ -359,6 +359,40 @@ test('ac-5: a successful save body never carries notes', async () => {
     }
 });
 
+test('save PUT body includes device_id so a profile attach survives', async () => {
+    const living = profileDoc('living-room');
+    const { dp, calls } = fresh({ profiles: [living] });
+    await settle();
+    await dp().save({
+        id: 'living-room',
+        name: 'Living room',
+        kit_id: 'kit-living',
+        device_id: 'pad-1',
+        device: { source_id: 'web-midi::pad-1', enabled: true },
+        input: { midi_channel: -1, hit_detection: false, synth_volume: 0.7 },
+    });
+    const puts = calls.filter((c) => c.method === 'PUT');
+    assert.ok(puts.length >= 1);
+    const last = puts[puts.length - 1].body;
+    assert.equal(last.device_id, 'pad-1');
+    assert.equal(Object.prototype.hasOwnProperty.call(last, 'notes'), false);
+});
+
+test('writeInputFields preserves device_id', async () => {
+    const living = profileDoc('living-room', { rest: { device_id: 'pad-1' } });
+    const { dp, calls } = fresh({ profiles: [living], active: 'living-room' });
+    await settle();
+    await dp().writeInputFields({
+        deviceEnabled: true,
+        midiChannel: 0,
+        hitDetection: false,
+        synthVolume: 0.5,
+    });
+    const puts = calls.filter((c) => c.method === 'PUT');
+    assert.ok(puts.length >= 1);
+    assert.equal(puts[puts.length - 1].body.device_id, 'pad-1');
+});
+
 // ── security: logical source_id only ────────────────────────────────────
 
 test('save strips reserved highway keys and never PUTs notes via a nested object', async () => {

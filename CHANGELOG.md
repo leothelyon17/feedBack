@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Settings → Drums is Profiles first.** The 2D plugin panel is titled
+  Profiles (create / rename / attach device / lane map / Make active).
+  Lane order is the attached MIDI device's trigger pool, stored on
+  `profile.highway.3d.lanes`. Phase Shift / Rock Band stay under a 2D
+  Drum Highway disclosure. 3D Drum Highway keeps chart fallbacks and kit
+  import only; bloom/camera/theme stay on Graphics.
+- **Drum profile save keeps `device_id`.** Attaching a MIDI device on
+  Profiles was flashing then reverting to None because the in-page
+  accessor dropped `device_id` from the PUT body.
+- **Note map is instance `triggers`.** Settings → MIDI rows come from the
+  saved device (type pick copies a template; Generic starts empty). Add,
+  rename, or delete triggers on that device; MIDI numbers stay Learn-only.
+- **MIDI device instance triggers.** Each saved device copies its type's
+  trigger list (shipped Generic is empty), then the user can add, rename, or
+  delete rows on that instance. Learn validates `piece_id` against the device
+  list; notes no longer require `drums.PIECES`.
+- **Settings → MIDI Device List.** The saved-device picker is labeled
+  Device List. **Create New** is the last option; it reveals a name field
+  (unique display name required) instead of cloning the selected type's
+  name.
+
+### Fixed
+- **MIDI Learn ignored kit hits when the saved device had no source.** Settings →
+  MIDI Learn opened `midiInput` only from `device.source_id`. Overlay-migrated
+  devices (and any document created without a bound port) keep `source_id: ""`,
+  so Learn stayed on “Listening…” and never attached a listener. The detected-
+  source picker now persists the logical id onto the selected device (notes
+  stay), Learn discovers and opens every detected port, and a note-on completes
+  the map. A missing source is reported in the live region instead of a silent
+  listen. Web-MIDI ports are armed on Detect (not only on Learn) using
+  one `MIDIAccess`: `onmidimessage` plus a non-blocking `MIDIPort.open()`,
+  and Settings → MIDI shows the last pad message so a USB kit can be
+  verified without starting Learn. Re-running Detect does not call
+  `requestMIDIAccess()` again.
+
 ### Added
 - **3D consumes MIDI device map (INIT-003/SPEC-013).** Bundled
   `drum_highway_3d` scores from the attached MIDI device's `notes` via

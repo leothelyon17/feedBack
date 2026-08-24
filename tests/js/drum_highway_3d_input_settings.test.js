@@ -388,5 +388,5 @@ test('REQ-005: settings markup has no MIDI channel knobs (MIDI tab owns them)', 
     assert.doesNotMatch(html, /id="drumh3d-midi-input"/);
     assert.doesNotMatch(html, /id="drumh3d-hit-detect"/);
     assert.doesNotMatch(html, /id="drumh3d-synth-vol"/);
-    assert.match(html, /3D lane layout/);
+    assert.match(html, /Chart fallbacks/);
 });

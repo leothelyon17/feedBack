@@ -2,67 +2,21 @@
     <h3 id="drumh3d-heading" class="text-sm font-medium text-gray-400 mb-2">3D Drum Highway</h3>
     <p class="text-xs text-gray-500 mb-3">
         Pick a song with a drum tab (sloppak-spec §5.3), choose <em>3D
-        Drum Highway</em> from the viz picker. The drum profile switcher
-        is shared with the 2D highway. MIDI device mapping lives on the
-        MIDI tab. Bloom, camera, and theme live on the Graphics tab.
+        Drum Highway</em> from the viz picker. Profile name, MIDI device,
+        and lane order live under <strong>Profiles</strong> on this tab.
+        MIDI note mapping lives on the MIDI tab. Bloom, camera, and theme
+        live on the Graphics tab.
     </p>
 
-    <!-- Drum profile switcher (INIT-003/SPEC-006) -->
     <div class="mt-3">
-        <h4 id="drumh3d-profile-heading" class="text-xs font-medium text-gray-300 mb-2">Drum profile</h4>
+        <h4 class="text-xs font-medium text-gray-300 mb-2">Chart fallbacks</h4>
         <p class="text-xs text-gray-500 mb-3">
-            Named session (device + highway). Switching a profile
-            refetches that device's MIDI notes. Two drums panels may both
-            switch the same active profile.
-        </p>
-        <p id="drumh3d-profile-active" class="text-xs text-gray-400 mb-2" aria-live="polite">
-            No profile active.
-        </p>
-        <label for="drumh3d-profile" class="text-xs font-medium text-gray-400 mb-1 block">Profile</label>
-        <div class="flex flex-wrap items-center gap-2 mb-3">
-            <select id="drumh3d-profile"
-                class="flex-1 bg-dark-700 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 outline-none">
-                <option value="">— select a profile —</option>
-            </select>
-            <button type="button" id="drumh3d-use-profile"
-                class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded-lg text-xs"
-                disabled>
-                Use this profile
-            </button>
-        </div>
-    </div>
-
-    <!-- 3D lane layout (visual only — drum_h3d_kit_v1) -->
-    <div class="mt-6 border-t border-gray-800 pt-4">
-        <h4 class="text-xs font-medium text-gray-300 mb-2">3D lane layout</h4>
-        <p class="text-xs text-gray-500 mb-3">
-            Visual only: add the pieces you actually have, in the order
-            you want them on this highway (left → right). This does not
-            change the MIDI device map (that lives on the MIDI tab). The
-            default fallback routing covers
-            most common kit setups; use the fallbacks panel below to
-            reroute any chart piece to a different lane, or set it to "—"
-            to silently drop it.
+            When a song uses a piece that is not on this profile's lanes,
+            route it to one of those lanes, or set "—" to silently drop
+            it. Lane order itself is edited under Profiles.
         </p>
 
-        <label class="text-xs font-medium text-gray-400 mb-1 block">Kit name</label>
-        <input type="text" id="drumh3d-kit-name" maxlength="80"
-            class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 outline-none mb-3"
-            oninput="window._drumH3dKit && window._drumH3dKit.onNameInput(this.value)">
-
-        <label class="text-xs font-medium text-gray-400 mb-1 block">Lanes (left → right on the highway; kick is always a full-width bar)</label>
-        <div id="drumh3d-kit-lanes" class="space-y-1 mb-2"></div>
-
-        <div class="mt-2 mb-3">
-            <label class="text-xs font-medium text-gray-400 mb-1 block">Add a piece</label>
-            <select id="drumh3d-kit-add"
-                onchange="window._drumH3dKit && window._drumH3dKit.onAddPiece(this.value); this.value=''"
-                class="w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 outline-none">
-                <option value="">— pick a piece to add —</option>
-            </select>
-        </div>
-
-        <details class="mt-2 mb-3">
+        <details class="mt-2 mb-3" open>
             <summary class="text-xs text-gray-400 cursor-pointer">Chart fallbacks for pieces I don't have</summary>
             <p class="text-xs text-gray-500 mt-2 mb-2">
                 When a song uses a piece that isn't on your kit, route it
@@ -97,9 +51,9 @@
 
     <script>
     (function () {
-        // INIT-003/SPEC-013: Drums-tab fragment (profile + visual lanes).
-        // MIDI device picker, channel knobs, and mapping table live on the
-        // MIDI tab — 3D only consumes device.notes.
+        // INIT-003: 3D-unique Drums-tab fragment (chart fallbacks + kit
+        // import). Profile name, device attach, and lane order live in
+        // Profiles. MIDI notes live on the MIDI tab.
 
         const FRIENDLY = {
             kick: 'Kick',
@@ -118,71 +72,8 @@
                 setTimeout(renderKit, 100);
                 return;
             }
-            const PIECE_CATEGORY = window.drumH3dGetPieceCategory ? window.drumH3dGetPieceCategory() : {};
             const ALL_PIECES = window.drumH3dGetAllPieces ? window.drumH3dGetAllPieces() : [];
-            const nameEl = document.getElementById('drumh3d-kit-name');
-            if (nameEl) nameEl.value = kit.name || '';
-
-            const lanesEl = document.getElementById('drumh3d-kit-lanes');
-            if (!lanesEl) return;
-            lanesEl.innerHTML = '';
-            const taken = new Set(kit.lanes.map(l => l.piece));
-            kit.lanes.forEach((ln, i) => {
-                const row = document.createElement('div');
-                row.className = 'flex items-center gap-2 px-2 py-1 bg-dark-700/60 rounded';
-                const pieceName = friendly(ln.piece);
-                row.innerHTML =
-                    `<span class="font-mono text-[10px] text-gray-500 w-6 text-center">${i}</span>` +
-                    `<span class="flex-1 text-xs text-gray-300">${pieceName}</span>` +
-                    `<button type="button" data-act="up"   data-i="${i}" class="px-1.5 py-0.5 text-xs text-gray-400 hover:text-white" ${i === 0 ? 'disabled' : ''} title="Move up" aria-label="Move ${pieceName} up">▲</button>` +
-                    `<button type="button" data-act="down" data-i="${i}" class="px-1.5 py-0.5 text-xs text-gray-400 hover:text-white" ${i === kit.lanes.length - 1 ? 'disabled' : ''} title="Move down" aria-label="Move ${pieceName} down">▼</button>` +
-                    `<button type="button" data-act="rm"   data-i="${i}" class="px-1.5 py-0.5 text-xs text-red-400 hover:text-red-300" title="Remove from kit" aria-label="Remove ${pieceName} from kit">✗</button>`;
-                lanesEl.appendChild(row);
-            });
-            lanesEl.querySelectorAll('button').forEach(btn => {
-                btn.onclick = () => {
-                    const i = parseInt(btn.dataset.i, 10);
-                    const act = btn.dataset.act;
-                    const next = JSON.parse(JSON.stringify(kit));
-                    if (act === 'up' && i > 0) {
-                        [next.lanes[i - 1], next.lanes[i]] = [next.lanes[i], next.lanes[i - 1]];
-                    } else if (act === 'down' && i < next.lanes.length - 1) {
-                        [next.lanes[i + 1], next.lanes[i]] = [next.lanes[i], next.lanes[i - 1]];
-                    } else if (act === 'rm') {
-                        const removed = next.lanes[i].piece;
-                        next.lanes.splice(i, 1);
-                        for (const k of Object.keys(next.fallbacks || {})) {
-                            if (next.fallbacks[k] === removed) delete next.fallbacks[k];
-                        }
-                    } else { return; }
-                    if (!window.drumH3dSetKit(next)) {
-                        setStatus('Kit must have at least one lane', 'err');
-                    }
-                };
-            });
-
-            const addSel = document.getElementById('drumh3d-kit-add');
-            if (addSel) {
-                addSel.innerHTML = '<option value="">— pick a piece to add —</option>';
-                const groups = { kick: [], drum: [], cymbal: [] };
-                for (const p of ALL_PIECES) {
-                    if (taken.has(p)) continue;
-                    const cat = PIECE_CATEGORY[p] || 'drum';
-                    if (groups[cat]) groups[cat].push(p);
-                }
-                for (const [cat, label] of [['kick', 'Kick'], ['drum', 'Drums'], ['cymbal', 'Cymbals']]) {
-                    if (!groups[cat].length) continue;
-                    const og = document.createElement('optgroup');
-                    og.label = label;
-                    for (const p of groups[cat]) {
-                        const opt = document.createElement('option');
-                        opt.value = p;
-                        opt.textContent = friendly(p);
-                        og.appendChild(opt);
-                    }
-                    addSel.appendChild(og);
-                }
-            }
+            const taken = new Set((kit.lanes || []).map(l => l.piece));
 
             const fbEl = document.getElementById('drumh3d-kit-fallbacks');
             if (fbEl) {
@@ -273,65 +164,6 @@
         };
 
         window.addEventListener('drum_h3d:kit', () => renderKit());
-
-        function renderProfiles() {
-            const status = window.drumH3dGetProfileStatus
-                ? window.drumH3dGetProfileStatus()
-                : { selectedId: '', activeId: '', activeName: '', profiles: [] };
-            const sel = document.getElementById('drumh3d-profile');
-            const useBtn = document.getElementById('drumh3d-use-profile');
-            const activeEl = document.getElementById('drumh3d-profile-active');
-            if (!sel) return;
-            const prev = sel.value;
-            sel.textContent = '';
-            const none = document.createElement('option');
-            none.value = '';
-            none.textContent = '— select a profile —';
-            sel.appendChild(none);
-            const list = status.profiles || [];
-            for (let i = 0; i < list.length; i++) {
-                const p = list[i];
-                if (!p || !p.id) continue;
-                const opt = document.createElement('option');
-                opt.value = String(p.id);
-                opt.textContent = p.name ? String(p.name) : String(p.id);
-                sel.appendChild(opt);
-            }
-            const selected = status.selectedId || prev || status.activeId || '';
-            if (selected && Array.from(sel.options).some((o) => o.value === selected)) sel.value = selected;
-            const canActivate = !!(sel.value && sel.value !== status.activeId);
-            if (useBtn) {
-                useBtn.disabled = !canActivate;
-                useBtn.setAttribute('aria-disabled', canActivate ? 'false' : 'true');
-            }
-            if (activeEl) {
-                activeEl.textContent = status.activeId
-                    ? ('Active profile: ' + (status.activeName || status.activeId))
-                    : 'No profile active.';
-            }
-        }
-
-        const profileSel = document.getElementById('drumh3d-profile');
-        if (profileSel) {
-            profileSel.addEventListener('change', function () {
-                if (window.drumH3dSelectProfile) window.drumH3dSelectProfile(this.value);
-            });
-        }
-        const useProfileBtn = document.getElementById('drumh3d-use-profile');
-        if (useProfileBtn) {
-            useProfileBtn.addEventListener('click', function () {
-                if (window.drumH3dActivateProfile) window.drumH3dActivateProfile();
-            });
-        }
-        window.addEventListener('drum_h3d:profiles', renderProfiles);
-        (function pollProfiles() {
-            if (window.drumH3dEnsureProfilesInit) {
-                Promise.resolve(window.drumH3dEnsureProfilesInit()).then(renderProfiles);
-                renderProfiles();
-            } else {
-                setTimeout(pollProfiles, 100);
-            }
-        })();
 
         renderKit();
     })();

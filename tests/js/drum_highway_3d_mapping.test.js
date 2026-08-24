@@ -443,14 +443,16 @@ test('REQ-008: GM defaults cannot invoke DELETE', async () => {
     assert.equal(calls.some((c) => c.method === 'DELETE'), false);
 });
 
-test('REQ-008: settings markup has no mapping table; 3D lane layout remains', () => {
+test('REQ-008: settings markup has no mapping table; 3D fallbacks remain', () => {
     const html = fs.readFileSync(SETTINGS, 'utf8');
     assert.doesNotMatch(html, /id="drumh3d-use-kit"/);
     assert.doesNotMatch(html, /MIDI kit mapping/);
     assert.doesNotMatch(html, /id="drumh3d-map-rows"/);
     assert.doesNotMatch(html, /id="drumh3d-midi-input"/);
     assert.doesNotMatch(html, /id="drumh3d-midi-channel"/);
-    assert.match(html, /3D lane layout/);
+    assert.doesNotMatch(html, /id="drumh3d-kit-name"/);
+    assert.doesNotMatch(html, /id="drumh3d-kit-lanes"/);
+    assert.match(html, /Chart fallbacks/);
     assert.match(html, /type="button"/);
 });
 

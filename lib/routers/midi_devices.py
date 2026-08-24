@@ -90,6 +90,7 @@ def _device_public(device: dict) -> dict:
         "device_type_id": device["device_type_id"],
         "family": device["family"],
         "notes": {str(k): v for k, v in notes.items()},
+        "triggers": list(device.get("triggers") or []),
         "input": device.get("input"),
     }
 
@@ -108,12 +109,9 @@ def _type_public(catalog: dict) -> dict:
     return out
 
 
-def _catalog_trigger_ids(device: dict) -> set[str]:
-    catalog = load_device_type(device["device_type_id"], config_dir=appstate.config_dir)
-    if catalog is None:
-        return set()
+def _device_trigger_ids(device: dict) -> set[str]:
     ids: set[str] = set()
-    for row in catalog.get("triggers") or []:
+    for row in device.get("triggers") or []:
         if isinstance(row, dict) and isinstance(row.get("id"), str):
             ids.add(row["id"])
     return ids
@@ -148,7 +146,7 @@ def _require_piece_id_for_device(device: dict, body: bytes) -> str:
     piece_id = obj.get("piece_id")
     if not isinstance(piece_id, str) or not piece_id:
         raise HTTPException(status_code=400, detail="piece_id must be a catalog trigger id")
-    if piece_id not in _catalog_trigger_ids(device):
+    if piece_id not in _device_trigger_ids(device):
         raise HTTPException(
             status_code=400,
             detail="piece_id must be a trigger on this device type",

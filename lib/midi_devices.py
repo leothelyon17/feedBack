@@ -2,7 +2,8 @@
 
 A device is a detected port + chosen type + user map + input knobs.
 Profiles attach via device_id. Notes default to {} — never seeded from
-GM or a shipped kit. INIT-003/SPEC-008.
+GM or a shipped kit. Triggers copy from the catalog at create-from-type,
+then live on the instance. INIT-003/SPEC-008.
 """
 
 from __future__ import annotations
@@ -15,11 +16,13 @@ import tempfile
 import threading
 from pathlib import Path
 
-from drums import PIECES, _parse_note_key, load_kits
+from drums import _parse_note_key, load_kits
 from midi_device_types import (
     DEVICE_TYPE_ID_RE,
     FAMILIES,
     SHIPPED_DEVICE_TYPES_DIR,
+    TRIGGER_ID_RE,
+    _parse_trigger,
     device_types_dir,
     load_device_type,
     load_device_types,
@@ -121,8 +124,38 @@ def _normalise_input(raw: object) -> dict | None:
     }
 
 
-def _normalise_notes(raw: object) -> dict | None:
-    """User map only. Missing/None → {}. Never fills GM or kit defaults."""
+def _copy_trigger_rows(rows: object) -> list[dict]:
+    """Canonical trigger rows via the catalog parser. Skip bad rows."""
+    out: list[dict] = []
+    if not isinstance(rows, list):
+        return out
+    for raw in rows:
+        parsed = _parse_trigger(raw)
+        if not isinstance(parsed, dict):
+            continue
+        out.append(dict(parsed))
+    return out
+
+
+def _canonical_triggers(raw: object, catalog: dict) -> tuple[list[dict] | None, str | None]:
+    """Omitted/null → catalog copy. Present list → parse; empty allowed."""
+    if raw is None:
+        return [dict(row) for row in catalog.get("triggers") or []], None
+    if not isinstance(raw, list):
+        return None, "triggers must be a list"
+    return _copy_trigger_rows(raw), None
+
+
+def _trigger_ids(triggers: list[dict]) -> set[str]:
+    return {row["id"] for row in triggers if isinstance(row.get("id"), str)}
+
+
+def _normalise_notes(raw: object, allowed_ids: set[str] | None = None) -> dict | None:
+    """User map only. Missing/None → {}. Never fills GM or kit defaults.
+
+    Piece ids must match TRIGGER_ID_RE and, when allowed_ids is given, sit
+    on this device's trigger list — not drums.PIECES.
+    """
     if raw is None:
         return {}
     if not isinstance(raw, dict):
@@ -132,7 +165,9 @@ def _normalise_notes(raw: object) -> dict | None:
         note = _parse_note_key(key)
         if note is None:
             continue
-        if not isinstance(piece, str) or piece not in PIECES:
+        if not isinstance(piece, str) or not TRIGGER_ID_RE.fullmatch(piece):
+            continue
+        if allowed_ids is not None and piece not in allowed_ids:
             continue
         out[str(note)] = piece
     return out
@@ -154,7 +189,8 @@ def validate_device(
 
     Refuses raw MIDI port labels on source_id, unknown device_type_id,
     family mismatch vs the catalog, reserved keys, and a notes seed.
-    Empty notes is valid. INIT-003/SPEC-008.
+    Empty notes is valid. Omitted triggers default to a catalog copy so
+    old on-disk devices keep loading. INIT-003/SPEC-008.
     """
     if not isinstance(obj, dict):
         return None, "device body must be an object"
@@ -184,7 +220,10 @@ def validate_device(
         return None, "family must be drums|keys|other"
     if family != catalog["family"]:
         return None, "family must match the catalog type"
-    notes = _normalise_notes(obj.get("notes"))
+    triggers, trigger_err = _canonical_triggers(obj.get("triggers"), catalog)
+    if triggers is None:
+        return None, trigger_err
+    notes = _normalise_notes(obj.get("notes"), _trigger_ids(triggers))
     if notes is None:
         return None, "notes must be an object"
     inp = _normalise_input(obj.get("input"))
@@ -197,6 +236,7 @@ def validate_device(
         "device_type_id": catalog["id"],
         "family": family,
         "notes": notes,
+        "triggers": triggers,
         "input": inp,
     }
     return canonical, None
@@ -326,8 +366,9 @@ def device_from_type(
 ) -> tuple[dict | None, str | None]:
     """Create a device from a catalog type with empty notes.
 
-    Never copies shipped-kit notes, even when the type slug matches a
-    kit under data/drums/kits/. INIT-003/SPEC-008 ac-3.
+    Copies catalog trigger rows (id/name/zone) onto the instance. Never
+    copies shipped-kit notes, even when the type slug matches a kit
+    under data/drums/kits/. INIT-003/SPEC-008 ac-3.
     """
     catalog = load_device_type(type_id, config_dir=config_dir)
     if catalog is None:
@@ -339,6 +380,7 @@ def device_from_type(
         "device_type_id": catalog["id"],
         "family": catalog["family"],
         "notes": {},
+        "triggers": [dict(row) for row in catalog.get("triggers") or []],
         "input": dict(_DEFAULT_INPUT),
     }
     return save_device(config_dir, draft)

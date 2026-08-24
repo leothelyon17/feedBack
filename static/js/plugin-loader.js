@@ -108,6 +108,12 @@ function _pluginSettingsContainers() {
     }
     return out;
 }
+// Settings → Drums: the 2D viz plugin owns Profiles (shared session), not
+// a second "Drum Highway" heading. Viz-picker name stays plugin.name.
+function _pluginSettingsLabel(plugin) {
+    if (plugin && plugin.id === 'drums') return 'Profiles';
+    return (plugin && (plugin.name || plugin.id)) || '';
+}
 function _pluginSettingsTarget(plugin) {
     const cat = plugin && plugin.settings_category;
     if (cat) {
@@ -601,7 +607,7 @@ export async function loadPlugins() {
                 const labelWrap = document.createElement('span');
                 labelWrap.className = 'flex items-center gap-2';
                 const labelSpan = document.createElement('span');
-                labelSpan.textContent = plugin.name || plugin.id;
+                labelSpan.textContent = _pluginSettingsLabel(plugin);
                 labelWrap.appendChild(labelSpan);
                 // "Bundled" marker (feedBack#160). Visually distinguishes
                 // plugins that ship with the default container image from
@@ -675,7 +681,11 @@ export async function loadPlugins() {
                 body.className = 'px-4 py-4 border-t border-gray-800 space-y-4';
                 details.appendChild(body);
 
-                settingsTarget.appendChild(details);
+                if (settingsTarget.id === 'plugin-settings-drums' && plugin.id === 'drums' && settingsTarget.firstChild) {
+                    settingsTarget.insertBefore(details, settingsTarget.firstChild);
+                } else {
+                    settingsTarget.appendChild(details);
+                }
 
                 const settingsResp = await fetch(`/api/plugins/${plugin.id}/settings.html`);
                 body.innerHTML = await settingsResp.text();

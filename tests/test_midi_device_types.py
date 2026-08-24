@@ -9,6 +9,7 @@ import drums
 import midi_device_types as mdt
 
 SHIPPED_PRIME = mdt.SHIPPED_DEVICE_TYPES_DIR / "alesis-strata-prime.json"
+SHIPPED_GENERIC = mdt.SHIPPED_DEVICE_TYPES_DIR / "generic.json"
 KIT_PRIME = drums.SHIPPED_KITS_DIR / "alesis-strata-prime.json"
 
 
@@ -54,6 +55,23 @@ def test_shipped_strata_prime_catalog_has_pads_and_no_notes():
     kit_notes = json.loads(KIT_PRIME.read_text(encoding="utf-8"))["notes"]
     for midi_key in kit_notes:
         assert f'"{midi_key}"' not in dumped
+
+
+def test_shipped_generic_catalog_loads_with_empty_triggers():
+    parsed = mdt.load_device_type_file(SHIPPED_GENERIC)
+    assert parsed is not None
+    assert parsed["id"] == "generic"
+    assert parsed["name"] == "Generic"
+    assert parsed["family"] == "drums"
+    assert parsed["triggers"] == []
+    assert "notes" not in parsed
+    raw = json.loads(SHIPPED_GENERIC.read_text(encoding="utf-8"))
+    assert "notes" not in raw
+    assert raw["triggers"] == []
+    loaded = mdt.load_device_type("generic")
+    assert loaded is not None
+    assert loaded["triggers"] == []
+    assert "notes" not in loaded
 
 
 def test_load_device_type_never_returns_gm_or_kit_notes():

@@ -135,11 +135,11 @@
     <script type="module" src="/static/capabilities/visualization.js"></script>
     <script type="module" src="/static/capabilities/chart-transform.js"></script>
     <script type="module" src="/static/capabilities/note-detection.js"></script>
-    <script type="module" src="/static/capabilities/midi-input.js"></script>
+    <script type="module" src="/static/capabilities/midi-input.js?v=midi-learn-6"></script>
     <!-- INIT-003/SPEC-011: only in-page writer against /api/midi/devices.
          Loaded after midi-input.js so the Settings MIDI panel can list
          logical sources (labels display-only). -->
-    <script type="module" src="/static/capabilities/midi-devices.js"></script>
+    <script type="module" src="/static/capabilities/midi-devices.js?v=midi-learn-9"></script>
     <!-- INIT-002/SPEC-002: shared drum MIDI-input/settings contract for the
          2D and 3D drum highways. Loaded after midi-input.js for consistency
          with the other domain-adjacent capabilities above, though it does
@@ -147,7 +147,7 @@
     <script type="module" src="/static/capabilities/drum-input.js"></script>
     <!-- INIT-003/SPEC-004: only in-page writer against /api/drums/profiles.
          Loaded after drum-input.js so hydrate can applyFromProfile. -->
-    <script type="module" src="/static/capabilities/drum-profiles.js"></script>
+    <script type="module" src="/static/capabilities/drum-profiles.js?v=device-id-1"></script>
     <script type="module" src="/static/capabilities/interface-scale.js"></script>
 </head>
 <body class="h-screen flex overflow-hidden bg-fb-sidebar text-fb-text font-display">
@@ -972,9 +972,9 @@
                         <p class="text-xs text-gray-500 mb-3">
                             Pick a detected port by its display name. The logical source id is what gets saved — never the raw port label.
                         </p>
-                        <label for="midi-device-select" class="text-xs font-medium text-gray-400 mb-1 block">Saved devices</label>
+                        <label for="midi-device-select" class="text-xs font-medium text-gray-400 mb-1 block">Device List</label>
                         <div class="flex flex-wrap items-center gap-2 mb-3">
-                            <select id="midi-device-select" aria-label="Saved MIDI devices"
+                            <select id="midi-device-select" aria-label="Device List"
                                 class="flex-1 bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
                             </select>
                             <button type="button" id="midi-device-use"
@@ -983,7 +983,7 @@
                             </button>
                         </div>
                         <label for="midi-source-picker" class="text-xs font-medium text-gray-400 mb-1 block">Detected source</label>
-                        <div class="flex flex-wrap items-center gap-2 mb-3">
+                        <div class="flex flex-wrap items-center gap-2 mb-2">
                             <select id="midi-source-picker" aria-label="Detected MIDI source"
                                 class="flex-1 bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
                             </select>
@@ -992,20 +992,30 @@
                                 Detect MIDI inputs
                             </button>
                         </div>
-                        <label for="midi-device-name" class="text-xs font-medium text-gray-400 mb-1 block">New device name</label>
-                        <div class="flex flex-wrap items-center gap-2 mb-3">
-                            <input id="midi-device-name" type="text" autocomplete="off"
-                                class="flex-1 bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
-                            <button type="button" id="midi-device-create"
-                                class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded-lg text-xs">
-                                Create device
-                            </button>
+                        <p id="midi-hit-probe" class="text-xs text-emerald-400/90 mb-3" role="status">
+                            After Detect, hit a pad. The last MIDI message will show here.
+                        </p>
+                        <div id="midi-device-create-row" hidden>
+                            <label for="midi-device-name" class="text-xs font-medium text-gray-400 mb-1 block">New name</label>
+                            <div class="flex flex-wrap items-center gap-2 mb-3">
+                                <input id="midi-device-name" type="text" autocomplete="off" maxlength="64"
+                                    placeholder="e.g. Living room kit"
+                                    class="flex-1 bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                                <button type="button" id="midi-device-create"
+                                    class="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 rounded-lg text-xs">
+                                    Create
+                                </button>
+                                <button type="button" id="midi-device-create-cancel"
+                                    class="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 rounded-lg text-xs">
+                                    Cancel
+                                </button>
+                            </div>
                         </div>
                     </div>
                     <div class="border-t border-gray-800 pt-4">
                         <h4 class="text-xs font-medium text-gray-300 mb-2">Device type</h4>
                         <p class="text-xs text-gray-500 mb-3">
-                            Catalog of triggers and zones. Changing type starts an empty map — shipped kit notes are not copied.
+                            Changing type copies that type's trigger list onto this device. Generic starts empty. MIDI numbers stay blank until Learn.
                         </p>
                         <label for="midi-device-type" class="text-xs font-medium text-gray-400 mb-1 block">Type</label>
                         <select id="midi-device-type" aria-label="MIDI device type"
@@ -1015,7 +1025,7 @@
                     <div class="border-t border-gray-800 pt-4">
                         <h4 class="text-xs font-medium text-gray-300 mb-2">Note map</h4>
                         <p class="text-xs text-gray-500 mb-3">
-                            One row per catalog trigger. Unmapped rows stay visible with a blank MIDI number.
+                            Rows come from this device (copied from the type when you pick it). Add, rename, or remove anytime. MIDI numbers stay blank until Learn.
                         </p>
                         <p id="midi-map-status" class="text-xs text-gray-400 mb-2" role="status" aria-live="polite"></p>
                         <table id="midi-map-table" class="w-full text-xs text-gray-300">
@@ -1029,6 +1039,25 @@
                             </thead>
                             <tbody id="midi-map-body"></tbody>
                         </table>
+                        <div id="midi-map-add-row" class="flex flex-wrap items-center gap-2 mt-3" hidden>
+                            <input id="midi-map-add-name" type="text" autocomplete="off" maxlength="64"
+                                placeholder="Trigger name"
+                                aria-label="New trigger name"
+                                class="flex-1 bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                            <select id="midi-map-add-zone" aria-label="New trigger zone"
+                                class="bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                                <option value="">Zone (optional)</option>
+                                <option value="head">head</option>
+                                <option value="rim">rim</option>
+                                <option value="bell">bell</option>
+                                <option value="edge">edge</option>
+                                <option value="choke">choke</option>
+                            </select>
+                            <button type="button" id="midi-map-add"
+                                class="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 rounded-lg text-xs">
+                                Add trigger
+                            </button>
+                        </div>
                     </div>
                     <div class="border-t border-gray-800 pt-4">
                         <h4 class="text-xs font-medium text-gray-300 mb-2">Input</h4>
@@ -1488,7 +1517,7 @@
     <script defer src="/static/v3/settings.js"></script>
     <!-- INIT-003/SPEC-011: MIDI devices panel. Accessor is a head module;
          this classic defer mounts when #midi-devices-panel exists. -->
-    <script defer src="/static/v3/midi-devices-panel.js"></script>
+    <script defer src="/static/v3/midi-devices-panel.js?v=midi-learn-9"></script>
     <script defer src="/static/v3/interface-size-ui.js"></script>
     <!-- First-run home tour: spotlights the home cards via the shared tour
          engine (tour-engine.js, loaded above). Auto-runs once after onboarding

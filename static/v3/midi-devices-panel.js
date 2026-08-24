@@ -9,13 +9,18 @@
     const DEVICE_ID_RE = /^[a-z0-9-]+$/;
     const TYPE_ID_RE = /^[a-z0-9-]+$/;
     const SOURCE_ID_RE = /^[a-z0-9][a-z0-9._-]*(::[a-z0-9._-]+)*$/;
+    const TRIGGER_ID_RE = /^[a-z0-9_]+$/;
+    const TRIGGER_ZONES = ['head', 'rim', 'bell', 'edge', 'choke'];
+    const CREATE_SENTINEL = '__create__';
 
     let _learnPiece = null;
     let _learnHandle = null;
+    let _learnHandles = [];
     let _wired = false;
     let _devices = [];
     let _types = [];
     let _typesById = new Map();
+    let _lastDeviceId = '';
 
     function md() {
         return window.feedBack && window.feedBack.midiDevices;
@@ -60,7 +65,7 @@
         setText(el('midi-map-status'), msg || '');
     }
 
-    function fillSelect(select, items, valueKey, labelKey, selected, emptyLabel) {
+    function fillSelect(select, items, valueKey, labelKey, selected, emptyLabel, footer) {
         if (!select) return;
         const prev = selected != null ? String(selected) : select.value;
         select.textContent = '';
@@ -79,8 +84,54 @@
             opt.textContent = String(item[labelKey] != null ? item[labelKey] : opt.value);
             select.appendChild(opt);
         }
+        if (footer && footer.value != null) {
+            const extra = document.createElement('option');
+            extra.value = String(footer.value);
+            extra.textContent = String(footer.label != null ? footer.label : footer.value);
+            select.appendChild(extra);
+        }
         if (prev && Array.from(select.options).some((o) => o.value === prev)) {
             select.value = prev;
+        }
+    }
+
+    function hideCreateRow() {
+        const row = el('midi-device-create-row');
+        if (row) row.hidden = true;
+        const nameEl = el('midi-device-name');
+        if (nameEl) nameEl.value = '';
+    }
+
+    function showCreateRow() {
+        const row = el('midi-device-create-row');
+        if (row) row.hidden = false;
+        const nameEl = el('midi-device-name');
+        if (nameEl) {
+            nameEl.value = '';
+            try { nameEl.focus(); } catch (_) { /* best-effort */ }
+        }
+    }
+
+    function nameTaken(name) {
+        const want = String(name || '').trim().toLowerCase();
+        if (!want) return false;
+        for (let i = 0; i < _devices.length; i += 1) {
+            const d = _devices[i];
+            if (!d) continue;
+            const have = String(d.name || d.id || '').trim().toLowerCase();
+            if (have === want) return true;
+        }
+        return false;
+    }
+
+    function restoreDeviceSelect() {
+        const sel = el('midi-device-select');
+        if (!sel) return;
+        const prev = _lastDeviceId && DEVICE_ID_RE.test(_lastDeviceId) ? _lastDeviceId : '';
+        if (prev && Array.from(sel.options).some((o) => o.value === prev)) {
+            sel.value = prev;
+        } else {
+            sel.value = '';
         }
     }
 
@@ -114,6 +165,81 @@
         return _typesById.get(id) || null;
     }
 
+    function triggerIdOk(raw) {
+        return typeof raw === 'string' && TRIGGER_ID_RE.test(raw)
+            && raw !== '__proto__' && raw !== 'constructor' && raw !== 'prototype';
+    }
+
+    function cloneTriggers(list) {
+        const out = [];
+        const src = Array.isArray(list) ? list : [];
+        for (let i = 0; i < src.length; i += 1) {
+            const t = src[i];
+            if (!t || typeof t !== 'object') continue;
+            const id = typeof t.id === 'string' ? t.id : '';
+            if (!triggerIdOk(id)) continue;
+            const row = { id, name: t.name != null ? String(t.name) : id };
+            const zone = t.zone != null ? String(t.zone) : '';
+            if (zone && TRIGGER_ZONES.indexOf(zone) !== -1) row.zone = zone;
+            out.push(row);
+        }
+        return out;
+    }
+
+    function deviceTriggers(device) {
+        if (device && Array.isArray(device.triggers)) return cloneTriggers(device.triggers);
+        const catalog = selectedType();
+        return cloneTriggers(catalog && catalog.triggers);
+    }
+
+    function triggerSlug(name, taken) {
+        let id = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        if (!triggerIdOk(id)) id = 'trigger';
+        if (!taken.has(id)) return id;
+        let n = 2;
+        while (taken.has(id + '_' + n)) n += 1;
+        return id + '_' + n;
+    }
+
+    function syncAddRow(device) {
+        const ok = !!(device && device.id);
+        const row = el('midi-map-add-row');
+        const nameEl = el('midi-map-add-name');
+        const zoneEl = el('midi-map-add-zone');
+        const btn = el('midi-map-add');
+        if (row) row.hidden = !ok;
+        if (nameEl) nameEl.disabled = !ok;
+        if (zoneEl) zoneEl.disabled = !ok;
+        if (btn) btn.disabled = !ok;
+    }
+
+    async function persistDeviceMap(device, triggers, notes) {
+        const api = md();
+        if (!api || !device || !device.id) return null;
+        const saved = await api.save({
+            id: device.id,
+            name: device.name || device.id,
+            source_id: device.source_id || '',
+            device_type_id: device.device_type_id,
+            family: device.family || '',
+            notes: notes && typeof notes === 'object' && !Array.isArray(notes) ? notes : {},
+            input: device.input,
+            triggers: Array.isArray(triggers) ? triggers : [],
+        });
+        if (saved && saved.id) {
+            let found = false;
+            for (let i = 0; i < _devices.length; i += 1) {
+                if (_devices[i] && _devices[i].id === saved.id) {
+                    _devices[i] = saved;
+                    found = true;
+                }
+            }
+            if (!found) _devices.push(saved);
+            renderMap(saved);
+        }
+        return saved;
+    }
+
     function renderKnobs(device) {
         const input = sanitizeInput(device && device.input);
         const ch = el('midi-input-channel');
@@ -126,13 +252,34 @@
         if (volVal) volVal.textContent = Number(input.synth_volume).toFixed(2);
     }
 
+    function fillZoneSelect(select, current) {
+        if (!select) return;
+        select.textContent = '';
+        const blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = '';
+        select.appendChild(blank);
+        for (let i = 0; i < TRIGGER_ZONES.length; i += 1) {
+            const z = TRIGGER_ZONES[i];
+            const opt = document.createElement('option');
+            opt.value = z;
+            opt.textContent = z;
+            select.appendChild(opt);
+        }
+        const zone = current != null ? String(current) : '';
+        select.value = TRIGGER_ZONES.indexOf(zone) !== -1 ? zone : '';
+    }
+
     function renderMap(device) {
         const body = el('midi-map-body');
         const api = md();
+        syncAddRow(device);
         if (!body || !api || typeof api.mapRows !== 'function') return;
         body.textContent = '';
         const catalog = selectedType();
-        const triggers = (catalog && Array.isArray(catalog.triggers)) ? catalog.triggers : [];
+        const triggers = (device && Array.isArray(device.triggers))
+            ? device.triggers
+            : ((catalog && Array.isArray(catalog.triggers)) ? catalog.triggers : []);
         const notes = device && device.notes ? device.notes : {};
         const rows = api.mapRows(triggers, notes);
         for (let i = 0; i < rows.length; i += 1) {
@@ -141,12 +288,30 @@
             tr.setAttribute('data-trigger-id', row.id);
 
             const nameTd = document.createElement('td');
-            nameTd.textContent = row.name;
+            const nameIn = document.createElement('input');
+            nameIn.type = 'text';
+            nameIn.value = row.name;
+            nameIn.className = 'w-full bg-dark-700 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 outline-none';
+            nameIn.setAttribute('aria-label', 'Trigger name');
+            nameIn.setAttribute('data-trigger-name', row.id);
+            nameTd.appendChild(nameIn);
             tr.appendChild(nameTd);
 
             const zoneTd = document.createElement('td');
-            zoneTd.textContent = row.zone;
+            const zoneSel = document.createElement('select');
+            zoneSel.className = 'bg-dark-700 border border-gray-800 rounded-lg px-3 py-1.5 text-xs text-gray-300 outline-none';
+            zoneSel.setAttribute('aria-label', 'Trigger zone');
+            zoneSel.setAttribute('data-trigger-zone', row.id);
+            fillZoneSelect(zoneSel, row.zone);
+            zoneTd.appendChild(zoneSel);
             tr.appendChild(zoneTd);
+
+            nameIn.addEventListener('change', function () {
+                persistRename(row.id, nameIn.value, zoneSel.value);
+            });
+            zoneSel.addEventListener('change', function () {
+                persistRename(row.id, nameIn.value, zoneSel.value);
+            });
 
             const midiTd = document.createElement('td');
             midiTd.className = 'midi-map-midi';
@@ -176,28 +341,226 @@
                 });
                 actTd.appendChild(rm);
             }
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'px-1.5 py-0.5 text-xs text-red-400 hover:text-red-300';
+            del.textContent = 'Delete';
+            del.setAttribute('data-delete-trigger', row.id);
+            del.setAttribute('aria-label', 'Delete trigger ' + row.name);
+            del.addEventListener('click', function () {
+                deleteTrigger(row.id);
+            });
+            actTd.appendChild(del);
             tr.appendChild(actTd);
             body.appendChild(tr);
         }
     }
 
-    function stopLearnListen() {
-        if (_learnHandle && typeof _learnHandle.removeListener === 'function' && _learnHandle._onMsg) {
-            try { _learnHandle.removeListener(_learnHandle._onMsg); } catch (_) { /* best-effort */ }
+    async function persistRename(triggerId, name, zone) {
+        const device = selectedDevice();
+        if (!device || !device.id || !triggerIdOk(triggerId)) return;
+        const triggers = deviceTriggers(device);
+        let found = false;
+        for (let i = 0; i < triggers.length; i += 1) {
+            if (triggers[i].id !== triggerId) continue;
+            found = true;
+            const nextName = String(name || '').trim() || triggerId;
+            triggers[i].name = nextName;
+            const z = zone != null ? String(zone) : '';
+            if (z && TRIGGER_ZONES.indexOf(z) !== -1) triggers[i].zone = z;
+            else delete triggers[i].zone;
         }
-        _learnHandle = null;
+        if (!found) return;
+        try {
+            await persistDeviceMap(device, triggers, device.notes);
+            status('');
+        } catch (err) {
+            status((err && err.message) || 'Could not rename trigger');
+        }
+        await refresh();
     }
 
-    function onLearnMidi(data) {
+    async function addTrigger() {
+        const device = selectedDevice();
+        if (!device || !device.id) {
+            status('Select a MIDI device before adding a trigger.');
+            return;
+        }
+        const nameEl = el('midi-map-add-name');
+        const zoneEl = el('midi-map-add-zone');
+        const name = nameEl ? String(nameEl.value || '').trim() : '';
+        if (!name) {
+            status('Enter a trigger name.');
+            return;
+        }
+        const triggers = deviceTriggers(device);
+        const taken = new Set(triggers.map((t) => t && t.id));
+        const id = triggerSlug(name, taken);
+        const row = { id, name };
+        const zone = zoneEl ? String(zoneEl.value || '') : '';
+        if (zone && TRIGGER_ZONES.indexOf(zone) !== -1) row.zone = zone;
+        triggers.push(row);
+        try {
+            await persistDeviceMap(device, triggers, device.notes);
+            status('');
+            if (nameEl) nameEl.value = '';
+            if (zoneEl) zoneEl.value = '';
+        } catch (err) {
+            status((err && err.message) || 'Could not add trigger');
+        }
+        await refresh();
+    }
+
+    async function deleteTrigger(triggerId) {
+        const device = selectedDevice();
+        if (!device || !device.id || !triggerIdOk(triggerId)) return;
+        if (_learnPiece === triggerId) {
+            _learnPiece = null;
+            stopLearnListen();
+        }
+        const triggers = deviceTriggers(device).filter((t) => t.id !== triggerId);
+        const notes = {};
+        const prev = device.notes && typeof device.notes === 'object' ? device.notes : {};
+        for (const key of Object.keys(prev)) {
+            if (prev[key] !== triggerId) notes[key] = prev[key];
+        }
+        try {
+            await persistDeviceMap(device, triggers, notes);
+            status('');
+        } catch (err) {
+            status((err && err.message) || 'Could not delete trigger');
+        }
+        await refresh();
+    }
+
+    function pickerSourceId() {
+        const sel = el('midi-source-picker');
+        const id = sel && sel.value;
+        if (!id || !sourceIdOk(id)) return '';
+        return id;
+    }
+
+    function liveSourceId(device) {
+        const fromPicker = pickerSourceId();
+        if (fromPicker) return fromPicker;
+        const fromDevice = device && device.source_id;
+        if (fromDevice && sourceIdOk(fromDevice)) return fromDevice;
+        return '';
+    }
+
+    async function persistSourceId(sourceId) {
+        const api = md();
+        const device = selectedDevice();
+        if (!api || !device || !device.id) return;
+        if (!sourceIdOk(sourceId)) return;
+        if (typeof api.writeSourceId === 'function') {
+            await api.writeSourceId(device.id, sourceId || '');
+            return;
+        }
+        if ((device.source_id || '') === (sourceId || '')) return;
+        await api.save({
+            id: device.id,
+            name: device.name || device.id,
+            source_id: sourceId || '',
+            device_type_id: device.device_type_id,
+            family: device.family || '',
+            notes: device.notes && typeof device.notes === 'object' ? device.notes : {},
+            input: device.input,
+            triggers: Array.isArray(device.triggers) ? device.triggers : [],
+        });
+    }
+
+    let _runStatus = 0;
+
+    function midiBytes(payload) {
+        if (!payload) return null;
+        let data = payload;
+        if (payload.data != null && !ArrayBuffer.isView(payload) && !Array.isArray(payload)) {
+            data = payload.data;
+        }
+        if (!data || data.length < 1) return null;
+        const first = data[0];
+        if (first < 0x80 && _runStatus) {
+            const out = new Uint8Array(data.length + 1);
+            out[0] = _runStatus;
+            for (let i = 0; i < data.length; i += 1) out[i + 1] = data[i];
+            data = out;
+        } else if (first >= 0x80 && first < 0xf0) {
+            _runStatus = first;
+        }
+        return data;
+    }
+
+    let _watching = false;
+
+    function describeMidi(data) {
+        if (!data || data.length < 2) return '';
+        const st = data[0];
+        const cmd = st & 0xf0;
+        const ch = (st & 0x0f) + 1;
+        const n = data[1];
+        const v = data.length > 2 ? data[2] : 0;
+        if (data.length >= 3 && cmd === 0x90 && v > 0) {
+            return 'note-on  ch' + ch + '  note ' + n + '  vel ' + v;
+        }
+        if (cmd === 0x80 || (cmd === 0x90 && v === 0)) {
+            return 'note-off  ch' + ch + '  note ' + n;
+        }
+        return 'ch' + ch + '  note ' + n;
+    }
+
+    function onLiveMidi(msg) {
+        const data = midiBytes(msg);
+        if (!data) return;
+        const probe = el('midi-hit-probe');
+        const label = (msg && msg.label) ? String(msg.label) : 'MIDI';
+        const desc = describeMidi(data);
+        if (desc) setText(probe, label + ' — ' + desc);
+        if (msg && msg.logicalSourceKey && sourceIdOk(msg.logicalSourceKey)) {
+            const sel = el('midi-source-picker');
+            if (sel && !pickerSourceId()) sel.value = msg.logicalSourceKey;
+        }
+        if (_learnPiece) onLearnMidi(data);
+    }
+
+    function startWatch() {
+        if (_watching) return;
+        const mi = window.feedBack && window.feedBack.midiInput;
+        if (!mi || typeof mi.watchMessages !== 'function') return;
+        mi.watchMessages(onLiveMidi);
+        _watching = true;
+    }
+
+    function stopLearnListen() {
+        const handles = _learnHandles.slice();
+        if (_learnHandle) handles.push(_learnHandle);
+        for (let i = 0; i < handles.length; i += 1) {
+            const handle = handles[i];
+            if (handle && typeof handle.removeListener === 'function' && handle._onMsg) {
+                try { handle.removeListener(handle._onMsg); } catch (_) { /* best-effort */ }
+            }
+        }
+        _learnHandle = null;
+        _learnHandles = [];
+    }
+
+    function onLearnMidi(payload) {
+        const data = midiBytes(payload);
         if (!_learnPiece || !data || data.length < 3) return;
         const statusByte = data[0] & 0xf0;
         const vel = data[2];
-        if (statusByte !== 0x90 || vel <= 0) return;
         const ch = data[0] & 0x0f;
+        const note = data[1];
         const device = selectedDevice();
         const input = sanitizeInput(device && device.input);
-        if (input.midi_channel !== -1 && ch !== input.midi_channel) return;
-        const note = data[1];
+        if (input.midi_channel !== -1 && ch !== input.midi_channel) {
+            status('Heard MIDI on channel ' + (ch + 1) + ' — waiting for the mapped channel.');
+            return;
+        }
+        if (statusByte !== 0x90 || vel <= 0) {
+            status('Heard MIDI (not a note-on). Hit the pad again.');
+            return;
+        }
         const piece = _learnPiece;
         _learnPiece = null;
         stopLearnListen();
@@ -235,22 +598,63 @@
             status('Select a MIDI device before Learn.');
             return;
         }
+        const mi = window.feedBack && window.feedBack.midiInput;
+        const picked = pickerSourceId();
+        if (mi && typeof mi.discover === 'function') {
+            try { await mi.discover(); } catch (_) { /* permission denied → empty picker */ }
+            await refresh();
+        }
+        const sourceId = picked || liveSourceId(selectedDevice() || device);
+        if (sourceId) {
+            try {
+                await persistSourceId(sourceId);
+            } catch (err) {
+                status((err && err.message) || 'Could not save MIDI source');
+                return;
+            }
+        }
+        const keys = [];
+        if (sourceId) keys.push(sourceId);
+        const listed = (mi && typeof mi.listSources === 'function') ? (mi.listSources() || []) : [];
+        for (let i = 0; i < listed.length; i += 1) {
+            const key = listed[i] && listed[i].logicalSourceKey;
+            if (key && sourceIdOk(key) && keys.indexOf(key) === -1) keys.push(key);
+        }
+        if (!keys.length) {
+            status('Select a detected MIDI source, then Learn.');
+            return;
+        }
+        stopLearnListen();
         _learnPiece = pieceId;
         status('Listening for a MIDI note for ' + (pieceName || pieceId) + '…');
-        renderMap(device);
-        const mi = window.feedBack && window.feedBack.midiInput;
-        const sourceId = device.source_id;
-        if (!mi || typeof mi.open !== 'function' || !sourceIdOk(sourceId) || !sourceId) return;
+        renderMap(selectedDevice() || device);
+        if (!mi || typeof mi.open !== 'function') {
+            _learnPiece = null;
+            status('MIDI input is not available in this browser.');
+            renderMap(selectedDevice() || device);
+            return;
+        }
         try {
-            const opened = await mi.open({ requester: 'midi-devices-panel', logicalSourceKey: sourceId });
-            const handle = opened && opened.handle;
-            if (handle && typeof handle.addListener === 'function') {
-                stopLearnListen();
-                handle._onMsg = onLearnMidi;
-                handle.addListener(onLearnMidi);
-                _learnHandle = handle;
+            if (sourceId && typeof mi.select === 'function') mi.select(sourceId);
+            for (let i = 0; i < keys.length; i += 1) {
+                const opened = await mi.open({ requester: 'midi-devices-panel', logicalSourceKey: keys[i] });
+                const handle = opened && opened.handle;
+                if (handle && typeof handle.addListener === 'function') {
+                    handle._onMsg = onLearnMidi;
+                    handle.addListener(onLearnMidi);
+                    _learnHandles.push(handle);
+                    _learnHandle = handle;
+                }
             }
-        } catch (_) { /* MIDI open is best-effort; Learn still surfaces 409 via putNote */ }
+            if (_learnHandles.length) return;
+            _learnPiece = null;
+            status('Could not open that MIDI source.');
+            renderMap(selectedDevice() || device);
+        } catch (err) {
+            _learnPiece = null;
+            status((err && err.message) || 'Could not open MIDI source');
+            renderMap(selectedDevice() || device);
+        }
     }
 
     async function removeMapping(midi) {
@@ -334,10 +738,20 @@
             return;
         }
         if (!type) {
+            hideCreateRow();
+            restoreDeviceSelect();
             status('Choose a device type.');
             return;
         }
-        const name = (nameEl && nameEl.value.trim()) || type.name || type.id;
+        const name = nameEl ? String(nameEl.value || '').trim() : '';
+        if (!name) {
+            status('Enter a unique device name.');
+            return;
+        }
+        if (nameTaken(name)) {
+            status('That name is already in the Device List.');
+            return;
+        }
         let id = slugFrom(name) || slugFrom(type.id) || 'midi-device';
         const existing = new Set(_devices.map((d) => d && d.id));
         if (existing.has(id)) {
@@ -358,7 +772,16 @@
             status((err && err.message) || 'Could not create device');
             return;
         }
+        hideCreateRow();
         await refresh();
+    }
+
+    function onCreateCancel() {
+        hideCreateRow();
+        restoreDeviceSelect();
+        status('');
+        renderKnobs(selectedDevice());
+        renderMap(selectedDevice());
     }
 
     async function onActivate() {
@@ -368,9 +791,23 @@
         if (!api || !id || !DEVICE_ID_RE.test(id)) return;
         try {
             await api.activate(id);
+            const src = pickerSourceId();
+            if (src) await persistSourceId(src);
             status('');
         } catch (err) {
             status((err && err.message) || 'Could not activate device');
+        }
+        await refresh();
+    }
+
+    async function onSourceChange() {
+        const src = pickerSourceId();
+        if (!src) return;
+        try {
+            await persistSourceId(src);
+            status('');
+        } catch (err) {
+            status((err && err.message) || 'Could not save MIDI source');
         }
         await refresh();
     }
@@ -391,14 +828,21 @@
             } catch (_) { /* catalogs optional */ }
         }
         const active = api.getActive && api.getActive();
+        const creating = el('midi-device-create-row') && !el('midi-device-create-row').hidden;
         fillSelect(
             el('midi-device-select'),
             _devices.map((d) => ({ id: d.id, name: d.name || d.id })),
             'id',
             'name',
-            (active && active.id) || '',
+            creating ? CREATE_SENTINEL : ((active && active.id) || ''),
             '— select a device —',
+            { value: CREATE_SENTINEL, label: 'Create New' },
         );
+        const deviceSel = el('midi-device-select');
+        if (creating && deviceSel) deviceSel.value = CREATE_SENTINEL;
+        else if (deviceSel && DEVICE_ID_RE.test(deviceSel.value)) {
+            _lastDeviceId = deviceSel.value;
+        }
         fillSelect(
             el('midi-device-type'),
             _types.map((t) => ({ id: t.id, name: t.name || t.id })),
@@ -439,21 +883,53 @@
         const panel = el('midi-devices-panel');
         if (!panel) return;
         _wired = true;
+        startWatch();
         const activateBtn = el('midi-device-use');
         if (activateBtn) activateBtn.addEventListener('click', onActivate);
         const createBtn = el('midi-device-create');
         if (createBtn) createBtn.addEventListener('click', onCreate);
+        const createCancel = el('midi-device-create-cancel');
+        if (createCancel) createCancel.addEventListener('click', onCreateCancel);
+        const nameEl = el('midi-device-name');
+        if (nameEl) {
+            nameEl.addEventListener('keydown', function (e) {
+                if (e && e.key === 'Enter') {
+                    if (e.preventDefault) e.preventDefault();
+                    onCreate();
+                }
+                if (e && e.key === 'Escape') {
+                    if (e.preventDefault) e.preventDefault();
+                    onCreateCancel();
+                }
+            });
+        }
+        hideCreateRow();
         const typeSel = el('midi-device-type');
         if (typeSel) typeSel.addEventListener('change', onTypeChange);
         const deviceSel = el('midi-device-select');
         if (deviceSel) {
             deviceSel.addEventListener('change', function () {
+                if (deviceSel.value === CREATE_SENTINEL) {
+                    if (!selectedType()) {
+                        hideCreateRow();
+                        restoreDeviceSelect();
+                        status('Choose a device type.');
+                        return;
+                    }
+                    showCreateRow();
+                    status('Enter a unique name for the new device.');
+                    return;
+                }
+                hideCreateRow();
+                if (DEVICE_ID_RE.test(deviceSel.value)) _lastDeviceId = deviceSel.value;
                 renderKnobs(selectedDevice());
                 renderMap(selectedDevice());
             });
         }
         const discoverBtn = el('midi-discover');
         if (discoverBtn) discoverBtn.addEventListener('click', onDiscover);
+        const sourceSel = el('midi-source-picker');
+        if (sourceSel) sourceSel.addEventListener('change', onSourceChange);
         const ch = el('midi-input-channel');
         const hit = el('midi-input-hit-detect');
         const vol = el('midi-input-synth-vol');
@@ -465,6 +941,17 @@
                 if (volVal) volVal.textContent = Number(vol.value).toFixed(2);
             });
             vol.addEventListener('change', persistKnobs);
+        }
+        const addBtn = el('midi-map-add');
+        if (addBtn) addBtn.addEventListener('click', addTrigger);
+        const addName = el('midi-map-add-name');
+        if (addName) {
+            addName.addEventListener('keydown', function (e) {
+                if (e && e.key === 'Enter') {
+                    if (e.preventDefault) e.preventDefault();
+                    addTrigger();
+                }
+            });
         }
         const bar = el('settings-tabbar');
         if (bar) {

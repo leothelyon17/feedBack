@@ -17,7 +17,7 @@ const MIDI_DEVICES_SRC = fs.readFileSync(MIDI_DEVICES_JS, 'utf8');
 const V3_HTML = fs.readFileSync(path.join(ROOT, 'static', 'v3', 'index.html'), 'utf8');
 
 function deviceDoc(id, extras) {
-    return Object.assign({
+    const doc = {
         id,
         name: extras && extras.name != null ? extras.name : id,
         source_id: extras && extras.source_id != null ? extras.source_id : 'web-midi::pad-1',
@@ -25,7 +25,11 @@ function deviceDoc(id, extras) {
         family: extras && extras.family != null ? extras.family : 'drums',
         notes: extras && extras.notes ? extras.notes : {},
         input: extras && extras.input ? extras.input : { midi_channel: -1, hit_detection: false, synth_volume: 0.7 },
-    }, extras && extras.rest);
+    };
+    if (extras && Object.prototype.hasOwnProperty.call(extras, 'triggers')) {
+        doc.triggers = extras.triggers;
+    }
+    return Object.assign(doc, extras && extras.rest);
 }
 
 function typeDoc(id, extras) {
@@ -637,6 +641,20 @@ test('listTypes GET /api/midi/device-types does not include a notes map', async 
 
 // ── panel markup (source-scan) ──────────────────────────────────────────
 
+test('MIDI Device List markup keeps Create New in the picker; name field is hidden until then', () => {
+    assert.match(V3_HTML, />Device List</);
+    assert.match(V3_HTML, /id="midi-device-select"[^>]*aria-label="Device List"/);
+    assert.match(V3_HTML, /id="midi-device-create-row"/);
+    assert.match(V3_HTML, /id="midi-device-name"/);
+    assert.match(V3_HTML, /id="midi-device-create"/);
+    assert.match(V3_HTML, /id="midi-device-create-cancel"/);
+    assert.doesNotMatch(V3_HTML, /Saved devices/);
+    assert.doesNotMatch(V3_HTML, />Create device</);
+    const rowAt = V3_HTML.indexOf('id="midi-device-create-row"');
+    const rowSlice = V3_HTML.slice(rowAt, rowAt + 80);
+    assert.match(rowSlice, /\bhidden\b/);
+});
+
 test('MIDI panel table and live-region exist in the MIDI tabpanel', () => {
     const panelAt = V3_HTML.lastIndexOf('<div class="fb-tabpanel" data-tab="midi">');
     assert.ok(panelAt !== -1);
@@ -698,4 +716,476 @@ test('subscribe returns an unsubscribe that stops further events', async () => {
     off();
     await md().activate('living-room-ekit');
     assert.equal(seen.length, 1);
+});
+
+test('writeSourceId persists logical source_id and keeps existing notes', async () => {
+    const living = deviceDoc('alesis-strata-prime', {
+        source_id: '',
+        notes: { 24: 'kick', 26: 'snare' },
+        triggers: [
+            { id: 'kick', name: 'Kick' },
+            { id: 'snare', name: 'Snare', zone: 'head' },
+        ],
+    });
+    const { md, calls, db } = fresh({ devices: [living], active: 'alesis-strata-prime' });
+    await settle();
+    await md().writeSourceId('alesis-strata-prime', 'web-midi::alesis-1');
+    const puts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/alesis-strata-prime');
+    assert.equal(puts.length, 1);
+    assert.equal(puts[0].body.source_id, 'web-midi::alesis-1');
+    assert.equal(puts[0].body.notes['26'], 'snare');
+    assert.ok(Array.isArray(puts[0].body.triggers), 'notes PUT must include triggers');
+    assert.equal(puts[0].body.triggers.length, 2);
+    assert.equal(puts[0].body.triggers[0].id, 'kick');
+    assert.equal(db.devices.get('alesis-strata-prime').notes['24'], 'kick');
+});
+
+test('writeSourceId rejects a raw MIDI port label', async () => {
+    const living = deviceDoc('alesis-strata-prime', { source_id: '' });
+    const { md, calls } = fresh({ devices: [living] });
+    await settle();
+    assert.throws(
+        () => md().writeSourceId('alesis-strata-prime', 'Alesis Prime Drum Module MIDI'),
+        /logical midi-input id/,
+    );
+    assert.equal(calls.filter((c) => c.method === 'PUT').length, 0);
+});
+
+function makeNode(tag, id) {
+    const node = {
+        tagName: String(tag || 'div').toUpperCase(),
+        id: id || '',
+        className: '',
+        type: '',
+        value: '',
+        checked: false,
+        innerHTML: '',
+        dataset: {},
+        children: [],
+        options: [],
+        listeners: {},
+        parent: null,
+        _text: '',
+        appendChild(child) {
+            this.children.push(child);
+            if (child && this.tagName === 'SELECT' && child.tagName === 'OPTION') {
+                this.options.push(child);
+            }
+            if (child) child.parent = this;
+            return child;
+        },
+        addEventListener(type, fn) {
+            (this.listeners[type] || (this.listeners[type] = [])).push(fn);
+        },
+        setAttribute(name, value) {
+            if (name === 'id') this.id = String(value);
+            if (name === 'type') this.type = String(value);
+            if (name === 'data-learn-trigger') this.dataset.learnTrigger = String(value);
+            if (name === 'data-trigger-id') this.dataset.triggerId = String(value);
+            if (name === 'data-delete-trigger') this.dataset.deleteTrigger = String(value);
+            if (name === 'data-trigger-name') this.dataset.triggerName = String(value);
+            if (name === 'data-trigger-zone') this.dataset.triggerZone = String(value);
+        },
+        closest() { return null; },
+        hidden: false,
+        disabled: false,
+        focus() {},
+        click() {
+            for (const fn of this.listeners.click || []) fn({ target: this });
+        },
+        change() {
+            for (const fn of this.listeners.change || []) fn({ target: this, type: 'change' });
+        },
+    };
+    Object.defineProperty(node, 'textContent', {
+        get() { return this._text; },
+        set(v) {
+            this._text = v == null ? '' : String(v);
+            this.children = [];
+            if (this.tagName === 'SELECT') this.options = [];
+        },
+    });
+    return node;
+}
+
+function findLearnButton(root, triggerId) {
+    if (!root) return null;
+    if (root.dataset && root.dataset.learnTrigger === triggerId) return root;
+    for (const child of root.children || []) {
+        const hit = findLearnButton(child, triggerId);
+        if (hit) return hit;
+    }
+    return null;
+}
+
+function findByDataset(root, key, value) {
+    if (!root) return null;
+    if (root.dataset && root.dataset[key] === value) return root;
+    for (const child of root.children || []) {
+        const hit = findByDataset(child, key, value);
+        if (hit) return hit;
+    }
+    return null;
+}
+
+function mountPanel(window, midiInput) {
+    const byId = window.__elements;
+    const ids = [
+        'midi-devices-panel', 'midi-device-select', 'midi-device-use',
+        'midi-source-picker', 'midi-discover', 'midi-hit-probe',
+        'midi-device-create-row', 'midi-device-name', 'midi-device-create',
+        'midi-device-create-cancel',
+        'midi-device-type', 'midi-map-status',
+        'midi-map-body', 'midi-map-table', 'midi-map-add-row',
+        'midi-map-add-name', 'midi-map-add-zone', 'midi-map-add',
+        'midi-input-channel',
+        'midi-input-hit-detect', 'midi-input-synth-vol', 'midi-input-synth-vol-val',
+        'settings-tabbar',
+    ];
+    for (const id of ids) {
+        const tag = id === 'midi-map-add-zone' || id.indexOf('select') !== -1 || id.indexOf('picker') !== -1 || id === 'midi-device-type' || id === 'midi-input-channel'
+            ? 'select'
+            : (id.indexOf('hit-detect') !== -1 || id === 'midi-device-name' || id === 'midi-map-add-name' ? 'input' : 'div');
+        byId.set(id, makeNode(tag, id));
+    }
+    window.document.readyState = 'complete';
+    window.document.createElement = (tag) => makeNode(tag);
+    window.document.addEventListener = window.addEventListener.bind(window);
+    window.feedBack.midiInput = midiInput;
+    window.Array = Array;
+    window.Array.from = Array.from;
+    window.ArrayBuffer = ArrayBuffer;
+    const panelSrc = fs.readFileSync(path.join(ROOT, 'static', 'v3', 'midi-devices-panel.js'), 'utf8');
+    vm.runInContext(panelSrc, window, { filename: 'midi-devices-panel.js' });
+}
+
+test('Learn with empty device.source_id opens the picker source and maps a note-on', async () => {
+    const living = deviceDoc('alesis-strata-prime', {
+        source_id: '',
+        notes: { 24: 'kick', 26: 'snare' },
+    });
+    const { window, calls } = fresh({ devices: [living], active: 'alesis-strata-prime' });
+    await settle();
+    const listeners = new Set();
+    const opens = [];
+    mountPanel(window, {
+        listSources: () => [{ logicalSourceKey: 'web-midi::alesis-1', label: 'Alesis Prime Drum Module MIDI' }],
+        discover: async () => {},
+        select: () => {},
+        open: async (opts) => {
+            opens.push(opts && opts.logicalSourceKey);
+            return {
+                handle: {
+                    addListener(fn) { listeners.add(fn); },
+                    removeListener(fn) { listeners.delete(fn); },
+                },
+            };
+        },
+    });
+    await settle();
+    const picker = window.document.getElementById('midi-source-picker');
+    picker.value = 'web-midi::alesis-1';
+    const learn = findLearnButton(window.document.getElementById('midi-map-body'), 'snare');
+    assert.ok(learn, 'snare Learn button missing');
+    learn.click();
+    await settle();
+    assert.deepEqual(opens, ['web-midi::alesis-1']);
+    assert.equal(listeners.size, 1);
+    const status = window.document.getElementById('midi-map-status');
+    assert.match(status.textContent, /Listening/);
+    const noteOn = new Uint8Array([0x99, 38, 100]);
+    for (const fn of listeners) fn(noteOn);
+    await settle();
+    const puts = calls.filter((c) => c.method === 'PUT' && /\/notes\/38$/.test(c.url));
+    assert.equal(puts.length, 1);
+    assert.equal(puts[0].body.piece_id, 'snare');
+    const sourcePuts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/alesis-strata-prime');
+    assert.ok(sourcePuts.some((c) => c.body.source_id === 'web-midi::alesis-1'));
+    assert.ok(sourcePuts.some((c) => c.body.notes && c.body.notes['26'] === 'snare'));
+});
+
+test('Learn with no detected source tells the user instead of hanging in listen', async () => {
+    const living = deviceDoc('alesis-strata-prime', { source_id: '' });
+    const { window } = fresh({ devices: [living], active: 'alesis-strata-prime' });
+    await settle();
+    const opens = [];
+    mountPanel(window, {
+        listSources: () => [],
+        discover: async () => {},
+        open: async (opts) => {
+            opens.push(opts && opts.logicalSourceKey);
+            return { handle: null };
+        },
+    });
+    await settle();
+    const learn = findLearnButton(window.document.getElementById('midi-map-body'), 'snare');
+    assert.ok(learn);
+    learn.click();
+    await settle();
+    assert.equal(opens.length, 0);
+    assert.match(window.document.getElementById('midi-map-status').textContent, /detected MIDI source/);
+});
+
+test('Device List select appends Create New after saved devices', async () => {
+    const living = deviceDoc('living-room-ekit', { name: 'Living room' });
+    const { window } = fresh({ devices: [living], active: 'living-room-ekit' });
+    await settle();
+    mountPanel(window, { listSources: () => [] });
+    await settle();
+    const sel = window.document.getElementById('midi-device-select');
+    const values = sel.options.map((o) => o.value);
+    const labels = sel.options.map((o) => o.textContent);
+    assert.ok(values.indexOf('living-room-ekit') !== -1);
+    assert.equal(values[values.length - 1], '__create__');
+    assert.equal(labels[labels.length - 1], 'Create New');
+    assert.ok(values.indexOf('__create__') > values.indexOf('living-room-ekit'));
+});
+
+test('selecting Create New reveals a name field and does not POST', async () => {
+    const living = deviceDoc('living-room-ekit', { name: 'Living room' });
+    const { window, calls } = fresh({
+        devices: [living],
+        active: 'living-room-ekit',
+        types: [typeDoc('alesis-strata-prime', { name: 'Alesis Strata Prime' })],
+    });
+    await settle();
+    mountPanel(window, { listSources: () => [] });
+    await settle();
+    const typeSel = window.document.getElementById('midi-device-type');
+    typeSel.value = 'alesis-strata-prime';
+    const sel = window.document.getElementById('midi-device-select');
+    sel.value = '__create__';
+    sel.change();
+    await settle();
+    assert.equal(window.document.getElementById('midi-device-create-row').hidden, false);
+    const posts = calls.filter((c) => c.method === 'POST' && c.url === '/api/midi/devices');
+    assert.equal(posts.length, 0);
+    assert.equal(sel.value, '__create__');
+});
+
+test('Create with a unique name POSTs that name, not the type name', async () => {
+    const living = deviceDoc('living-room-ekit', { name: 'Living room' });
+    const { window, calls } = fresh({
+        devices: [living],
+        active: 'living-room-ekit',
+        types: [typeDoc('alesis-strata-prime', { name: 'Alesis Strata Prime' })],
+    });
+    await settle();
+    mountPanel(window, { listSources: () => [] });
+    await settle();
+    window.document.getElementById('midi-device-type').value = 'alesis-strata-prime';
+    const sel = window.document.getElementById('midi-device-select');
+    sel.value = '__create__';
+    sel.change();
+    await settle();
+    window.document.getElementById('midi-device-name').value = 'Practice kit';
+    window.document.getElementById('midi-device-create').click();
+    await settle();
+    const posts = calls.filter((c) => c.method === 'POST' && c.url === '/api/midi/devices');
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].body.name, 'Practice kit');
+    assert.equal(posts[0].body.device_type_id, 'alesis-strata-prime');
+    assert.equal(posts[0].body.id, 'practice-kit');
+    assert.equal(sel.value, 'practice-kit');
+    assert.equal(window.document.getElementById('midi-device-create-row').hidden, true);
+});
+
+test('Create rejects a name already in the Device List', async () => {
+    const living = deviceDoc('alesis-strata-prime', { name: 'Alesis Strata Prime' });
+    const { window, calls } = fresh({
+        devices: [living],
+        active: 'alesis-strata-prime',
+        types: [typeDoc('alesis-strata-prime', { name: 'Alesis Strata Prime' })],
+    });
+    await settle();
+    mountPanel(window, { listSources: () => [] });
+    await settle();
+    window.document.getElementById('midi-device-type').value = 'alesis-strata-prime';
+    const sel = window.document.getElementById('midi-device-select');
+    sel.value = '__create__';
+    sel.change();
+    await settle();
+    window.document.getElementById('midi-device-name').value = 'Alesis Strata Prime';
+    window.document.getElementById('midi-device-create').click();
+    await settle();
+    assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
+    assert.match(window.document.getElementById('midi-map-status').textContent, /already in the Device List/);
+    assert.equal(window.document.getElementById('midi-device-create-row').hidden, false);
+});
+
+test('Create New without a type restores the previous device and does not POST', async () => {
+    const living = deviceDoc('living-room-ekit', { name: 'Living room' });
+    const { window, calls } = fresh({ devices: [living], active: 'living-room-ekit' });
+    await settle();
+    mountPanel(window, { listSources: () => [] });
+    await settle();
+    window.document.getElementById('midi-device-type').value = '';
+    const sel = window.document.getElementById('midi-device-select');
+    assert.equal(sel.value, 'living-room-ekit');
+    sel.value = '__create__';
+    sel.change();
+    await settle();
+    assert.equal(sel.value, 'living-room-ekit');
+    assert.match(window.document.getElementById('midi-map-status').textContent, /Choose a device type/);
+    const posts = calls.filter((c) => c.method === 'POST' && c.url === '/api/midi/devices');
+    assert.equal(posts.length, 0);
+});
+
+test('mapRows still works with custom ids', () => {
+    const { md } = fresh({ devices: [] });
+    const rows = md().mapRows(
+        [
+            { id: 'cowbell', name: 'Cowbell' },
+            { id: 'aux_tom', name: 'Aux Tom', zone: 'head' },
+        ],
+        { 56: 'cowbell' },
+    );
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].id, 'cowbell');
+    assert.equal(rows[0].midi, 56);
+    assert.equal(rows[1].id, 'aux_tom');
+    assert.equal(rows[1].midi, null);
+    assert.equal(rows[1].zone, 'head');
+});
+
+test('writeInputFields PUT body includes triggers', async () => {
+    const living = deviceDoc('living-room-ekit', {
+        notes: { 36: 'kick' },
+        triggers: [{ id: 'kick', name: 'Kick' }, { id: 'snare', name: 'Snare', zone: 'head' }],
+        input: { midi_channel: -1, hit_detection: false, synth_volume: 0.7 },
+    });
+    const { md, calls } = fresh({ devices: [living], active: 'living-room-ekit' });
+    await settle();
+    await md().writeInputFields({ midi_channel: 9, hit_detection: true, synth_volume: 0.25 });
+    const puts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/living-room-ekit');
+    assert.ok(puts.length >= 1);
+    const last = puts[puts.length - 1].body;
+    assert.ok(Array.isArray(last.triggers), 'notes PUT must include triggers');
+    assert.equal(last.triggers.length, 2);
+    assert.equal(last.triggers[0].id, 'kick');
+    assert.equal(last.notes['36'], 'kick');
+});
+
+test('Generic device renders 0 note-map rows', async () => {
+    const device = deviceDoc('generic-kit', {
+        name: 'Generic kit',
+        device_type_id: 'generic',
+        triggers: [],
+    });
+    const { window } = fresh({
+        devices: [device],
+        active: 'generic-kit',
+        types: [typeDoc('generic', { name: 'Generic', triggers: [] })],
+    });
+    await settle();
+    mountPanel(window, { listSources: () => [] });
+    await settle();
+    const body = window.document.getElementById('midi-map-body');
+    assert.equal(body.children.length, 0);
+    assert.equal(window.document.getElementById('midi-map-add-row').hidden, false);
+});
+
+test('Add trigger PUTs a new id on the saved device', async () => {
+    const device = deviceDoc('generic-kit', {
+        name: 'Generic kit',
+        device_type_id: 'generic',
+        triggers: [],
+    });
+    const { window, calls } = fresh({
+        devices: [device],
+        active: 'generic-kit',
+        types: [typeDoc('generic', { name: 'Generic', triggers: [] })],
+    });
+    await settle();
+    mountPanel(window, { listSources: () => [] });
+    await settle();
+    window.document.getElementById('midi-map-add-name').value = 'Cowbell';
+    window.document.getElementById('midi-map-add-zone').value = 'bell';
+    window.document.getElementById('midi-map-add').click();
+    await settle();
+    await settle();
+    const puts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/generic-kit');
+    assert.ok(puts.length >= 1);
+    const last = puts[puts.length - 1].body;
+    assert.ok(Array.isArray(last.triggers));
+    assert.equal(last.triggers.length, 1);
+    assert.equal(last.triggers[0].id, 'cowbell');
+    assert.equal(last.triggers[0].name, 'Cowbell');
+    assert.equal(last.triggers[0].zone, 'bell');
+    const row = findByDataset(window.document.getElementById('midi-map-body'), 'triggerId', 'cowbell');
+    assert.ok(row, 'new trigger row missing after add');
+});
+
+test('rename trigger keeps id so Learn mappings stay', async () => {
+    const device = deviceDoc('generic-kit', {
+        name: 'Generic kit',
+        device_type_id: 'generic',
+        notes: { 56: 'cowbell' },
+        triggers: [{ id: 'cowbell', name: 'Cowbell', zone: 'bell' }],
+    });
+    const { window, calls } = fresh({
+        devices: [device],
+        active: 'generic-kit',
+        types: [typeDoc('generic', { name: 'Generic', triggers: [] })],
+    });
+    await settle();
+    mountPanel(window, { listSources: () => [] });
+    await settle();
+    const nameIn = findByDataset(window.document.getElementById('midi-map-body'), 'triggerName', 'cowbell');
+    assert.ok(nameIn, 'name input missing');
+    nameIn.value = 'Aux bell';
+    nameIn.change();
+    await settle();
+    await settle();
+    const puts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/generic-kit');
+    assert.ok(puts.length >= 1);
+    const last = puts[puts.length - 1].body;
+    assert.equal(last.triggers.length, 1);
+    assert.equal(last.triggers[0].id, 'cowbell');
+    assert.equal(last.triggers[0].name, 'Aux bell');
+    assert.equal(last.triggers[0].zone, 'bell');
+    assert.equal(last.notes['56'], 'cowbell');
+});
+
+test('delete trigger removes the row and its notes', async () => {
+    const device = deviceDoc('generic-kit', {
+        name: 'Generic kit',
+        device_type_id: 'generic',
+        notes: { 36: 'kick', 38: 'snare' },
+        triggers: [
+            { id: 'kick', name: 'Kick' },
+            { id: 'snare', name: 'Snare', zone: 'head' },
+        ],
+    });
+    const { window, calls } = fresh({
+        devices: [device],
+        active: 'generic-kit',
+        types: [typeDoc('generic', { name: 'Generic', triggers: [] })],
+    });
+    await settle();
+    mountPanel(window, { listSources: () => [] });
+    await settle();
+    const del = findByDataset(window.document.getElementById('midi-map-body'), 'deleteTrigger', 'kick');
+    assert.ok(del, 'Delete trigger control missing');
+    del.click();
+    await settle();
+    await settle();
+    const puts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/generic-kit');
+    assert.ok(puts.length >= 1);
+    const last = puts[puts.length - 1].body;
+    assert.deepEqual(last.triggers.map((t) => t.id), ['snare']);
+    assert.equal(last.notes['36'], undefined);
+    assert.equal(last.notes['38'], 'snare');
+    assert.equal(findByDataset(window.document.getElementById('midi-map-body'), 'triggerId', 'kick'), null);
+    assert.ok(findByDataset(window.document.getElementById('midi-map-body'), 'triggerId', 'snare'));
+});
+
+test('Note map add-trigger row exists in the MIDI tabpanel', () => {
+    assert.match(V3_HTML, /id="midi-map-add-row"/);
+    assert.match(V3_HTML, /id="midi-map-add-name"/);
+    assert.match(V3_HTML, /id="midi-map-add-zone"/);
+    assert.match(V3_HTML, /id="midi-map-add"/);
+    assert.match(V3_HTML, /Rows come from this device/);
+    const rowAt = V3_HTML.indexOf('id="midi-map-add-row"');
+    assert.match(V3_HTML.slice(rowAt, rowAt + 100), /\bhidden\b/);
 });

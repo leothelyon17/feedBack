@@ -167,6 +167,73 @@ def test_device_from_type_empty_notes_despite_shipped_kit(tmp_path: Path):
     assert on_disk["notes"] == {}
     for midi_key in kit["notes"]:
         assert midi_key not in on_disk["notes"]
+    trigger_ids = [t["id"] for t in saved["triggers"]]
+    assert "kick" in trigger_ids
+    assert "snare" in trigger_ids
+    assert "hh_open" in trigger_ids
+    assert on_disk["triggers"] == saved["triggers"]
+
+
+def test_device_from_type_generic_has_empty_triggers(tmp_path: Path):
+    saved, err = md.device_from_type(tmp_path, "generic", device_id="from-generic")
+    assert err is None
+    assert saved is not None
+    assert saved["device_type_id"] == "generic"
+    assert saved["family"] == "drums"
+    assert saved["name"] == "Generic"
+    assert saved["notes"] == {}
+    assert saved["triggers"] == []
+
+
+def test_custom_trigger_and_non_pieces_note_round_trip(tmp_path: Path):
+    assert "cowbell" not in drums.PIECES
+    saved, err = md.save_device(
+        tmp_path,
+        _device(
+            triggers=[{"id": "cowbell", "name": "Cowbell"}],
+            notes={"56": "cowbell"},
+        ),
+    )
+    assert err is None
+    assert saved["triggers"] == [{"id": "cowbell", "name": "Cowbell"}]
+    assert saved["notes"] == {"56": "cowbell"}
+    loaded = md.load_device(tmp_path, "living-room-ekit")
+    assert loaded["triggers"] == [{"id": "cowbell", "name": "Cowbell"}]
+    assert loaded["notes"] == {"56": "cowbell"}
+    on_disk = json.loads(
+        (tmp_path / "midi" / "devices" / "living-room-ekit.json").read_text(encoding="utf-8")
+    )
+    assert on_disk["triggers"] == [{"id": "cowbell", "name": "Cowbell"}]
+    assert on_disk["notes"] == {"56": "cowbell"}
+
+
+def test_old_device_json_without_triggers_loads_catalog_default(tmp_path: Path):
+    dest = tmp_path / "midi" / "devices"
+    dest.mkdir(parents=True)
+    body = _device(notes={"36": "kick"})
+    assert "triggers" not in body
+    (dest / "living-room-ekit.json").write_text(json.dumps(body), encoding="utf-8")
+    loaded = md.load_device(tmp_path, "living-room-ekit")
+    assert loaded is not None
+    trigger_ids = [t["id"] for t in loaded["triggers"]]
+    assert "kick" in trigger_ids
+    assert "snare" in trigger_ids
+    assert loaded["notes"] == {"36": "kick"}
+
+
+def test_device_trigger_bad_rows_skipped(tmp_path: Path):
+    saved, err = md.save_device(
+        tmp_path,
+        _device(
+            triggers=[
+                {"id": "kick", "name": "Kick", "midi": 36},
+                {"id": "BadId", "name": "Nope"},
+                {"id": "snare", "name": "Snare", "zone": "rim"},
+            ],
+        ),
+    )
+    assert err is None
+    assert saved["triggers"] == [{"id": "snare", "name": "Snare", "zone": "rim"}]
 
 
 # ── ac-4: validate_profile accepts existing device_id; still rejects notes ───
@@ -610,7 +677,15 @@ def test_migrate_uses_matching_catalog_type_id(tmp_path: Path):
     overlay = tmp_path / "midi" / "device-types"
     overlay.mkdir(parents=True)
     (overlay / "user-kit.json").write_text(
-        json.dumps({"id": "user-kit", "name": "User Type", "family": "drums", "triggers": []}),
+        json.dumps({
+            "id": "user-kit",
+            "name": "User Type",
+            "family": "drums",
+            "triggers": [
+                {"id": "kick", "name": "Kick"},
+                {"id": "snare", "name": "Snare"},
+            ],
+        }),
         encoding="utf-8",
     )
     _overlay_kit(tmp_path / "drums")

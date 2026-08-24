@@ -192,9 +192,15 @@
     let LANE_X0 = 0;
     let KICK_W = 0;
 
+    function _pieceIdOk(raw) {
+        return typeof raw === 'string' && /^[a-z0-9_]+$/.test(raw)
+            && raw !== '__proto__' && raw !== 'constructor' && raw !== 'prototype';
+    }
+
     function _validateKit(raw) {
-        // Light validation — accept anything that has lanes[] with
-        // pieces in ALL_PIECES. Reject malformed input rather than
+        // Light validation — accept device trigger ids (not only the
+        // chart ALL_PIECES vocabulary) so Profiles lanes can include
+        // pads like snare_rim. Reject malformed input rather than
         // letting a bad config crash initScene.
         if (!raw || typeof raw !== 'object') return null;
         const lanes = Array.isArray(raw.lanes) ? raw.lanes : null;
@@ -202,8 +208,7 @@
         const cleanLanes = [];
         const seenPieces = new Set();
         for (const ln of lanes) {
-            if (!ln || typeof ln.piece !== 'string') continue;
-            if (!ALL_PIECES.includes(ln.piece)) continue;
+            if (!ln || !_pieceIdOk(ln.piece)) continue;
             if (seenPieces.has(ln.piece)) continue;
             seenPieces.add(ln.piece);
             cleanLanes.push({ piece: ln.piece });
@@ -212,7 +217,7 @@
         const fb = (raw.fallbacks && typeof raw.fallbacks === 'object') ? raw.fallbacks : {};
         const cleanFb = {};
         for (const [from, to] of Object.entries(fb)) {
-            if (!ALL_PIECES.includes(from) || !ALL_PIECES.includes(to)) continue;
+            if (!ALL_PIECES.includes(from) || !_pieceIdOk(to)) continue;
             if (!seenPieces.has(to)) continue;
             cleanFb[from] = to;
         }
@@ -917,6 +922,48 @@
     window.drumH3dGetPiecePaletteIdx = function () {
         return Object.assign({}, PIECE_PALETTE_IDX, { kick: -1 });
     };
+    function _applyProfileHighwayToKit(profile) {
+        const three = profile && profile.highway && profile.highway['3d'];
+        const lanes = three && Array.isArray(three.lanes) ? three.lanes : [];
+        if (!lanes.length) return false;
+        const kit = _validateKit({
+            name: (profile && typeof profile.name === 'string') ? profile.name : 'Custom kit',
+            lanes,
+            fallbacks: (three && three.fallbacks) || {},
+        });
+        if (!kit) return false;
+        _activeKit = kit;
+        _writeKitConfig(kit);
+        _rebuildLanesFromKit(kit);
+        _rebuildPieceToLaneMap(kit);
+        try {
+            window.dispatchEvent(new CustomEvent('drum_h3d:kit', { detail: { kit } }));
+        } catch (_) {}
+        return true;
+    }
+
+    function _persistKitToActiveProfile(kit) {
+        const dp = _drumProfiles();
+        const active = dp && typeof dp.getActive === 'function' ? dp.getActive() : null;
+        if (!active || !active.id || typeof dp.save !== 'function') return;
+        const highway = Object.assign({}, active.highway || {});
+        highway['3d'] = Object.assign({}, highway['3d'] || {}, {
+            lanes: kit.lanes,
+            fallbacks: kit.fallbacks || {},
+        });
+        try {
+            dp.save({
+                id: active.id,
+                name: active.name || active.id,
+                kit_id: active.kit_id || '',
+                device_id: active.device_id || '',
+                device: active.device,
+                input: active.input,
+                highway,
+            });
+        } catch (_) { /* profile save is best-effort for 3D-unique edits */ }
+    }
+
     window.drumH3dSetKit = function (raw) {
         const kit = _validateKit(raw);
         if (!kit) return false;
@@ -924,6 +971,7 @@
         _writeKitConfig(kit);
         _rebuildLanesFromKit(kit);
         _rebuildPieceToLaneMap(kit);
+        _persistKitToActiveProfile(kit);
         // Notify renderers + settings panels — each instance rebuilds its
         // scene; settings panels re-render to reflect the new kit.
         try {
@@ -1389,6 +1437,9 @@
         if (detail && detail.kit_id) _selectedKitId = String(detail.kit_id);
         _notifyProfilesUi();
         _ensureDeviceListeners();
+        const dp = _drumProfiles();
+        const active = dp && typeof dp.getActive === 'function' ? dp.getActive() : null;
+        if (active) _applyProfileHighwayToKit(active);
         return _refetchDeviceNotes(_attachedDeviceIdFrom(detail));
     }
 
@@ -1429,6 +1480,7 @@
             _profileList = Array.isArray(list) ? list : [];
             const active = typeof dp.getActive === 'function' ? dp.getActive() : null;
             if (active && active.id && !_selectedProfileId) _selectedProfileId = String(active.id);
+            if (active) _applyProfileHighwayToKit(active);
             _notifyProfilesUi();
             return { ok: true };
         } catch (_) {

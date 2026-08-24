@@ -309,13 +309,16 @@ test('ac-2: graphics fragment keeps bloom, camera, theme, cinematic', () => {
     assert.match(html, /id="drumh3d-palette"/);
 });
 
-test('ac-3: mapping table and MIDI knobs are gone from drums settings; profile switcher stays', () => {
+test('ac-3: mapping table, MIDI knobs, and profile/lane chrome are gone from 3D drums settings', () => {
     const drums = fs.readFileSync(SETTINGS, 'utf8');
     const gfx = fs.readFileSync(GRAPHICS, 'utf8');
     assert.match(drums, /data-drumh3d-fragment="drums"/);
-    assert.match(drums, /id="drumh3d-profile"/);
-    assert.match(drums, /id="drumh3d-use-profile"/);
-    assert.match(drums, /3D lane layout/);
+    assert.match(drums, /Chart fallbacks/);
+    assert.doesNotMatch(drums, /id="drumh3d-profile"/);
+    assert.doesNotMatch(drums, /id="drumh3d-use-profile"/);
+    assert.doesNotMatch(drums, /id="drumh3d-kit-name"/);
+    assert.doesNotMatch(drums, /id="drumh3d-kit-lanes"/);
+    assert.doesNotMatch(drums, /3D lane layout/);
     assert.doesNotMatch(drums, /id="drumh3d-core-kit"/);
     assert.doesNotMatch(drums, /id="drumh3d-use-kit"/);
     assert.doesNotMatch(drums, /id="drumh3d-map-rows"/);

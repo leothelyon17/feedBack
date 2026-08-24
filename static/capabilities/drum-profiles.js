@@ -122,10 +122,15 @@
         if (device === null) {
             throw new Error('device.source_id must be a logical midi-input id');
         }
+        const rawDeviceId = profile.device_id == null ? '' : String(profile.device_id);
+        if (rawDeviceId && !PROFILE_ID_RE.test(rawDeviceId)) {
+            throw new Error('invalid device id');
+        }
         const wire = {
             id: String(profile.id || ''),
             name: profile.name != null ? String(profile.name) : String(profile.id || ''),
             kit_id: profile.kit_id != null ? String(profile.kit_id) : '',
+            device_id: rawDeviceId,
             device,
             input: _sanitizeInput(profile.input),
         };
@@ -268,6 +273,7 @@
             id: _cache.activeId,
             name: prev.name || _cache.activeId,
             kit_id: prev.kit_id || '',
+            device_id: prev.device_id || '',
             highway: prev.highway,
             device: {
                 source_id: (prev.device && prev.device.source_id) || '',

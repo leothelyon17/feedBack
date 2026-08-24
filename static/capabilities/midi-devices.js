@@ -24,7 +24,13 @@
     const EVENT_NAME = 'feedback:midi-device-change';
     const DEVICE_ID_RE = /^[a-z0-9-]+$/;
     const TYPE_ID_RE = /^[a-z0-9-]+$/;
-    const TRIGGER_ID_RE = /^[a-z0-9][a-z0-9_]*$/;
+    const TRIGGER_ID_RE = /^[a-z0-9_]+$/;
+    const TRIGGER_ZONES = { head: 1, rim: 1, bell: 1, edge: 1, choke: 1 };
+
+    function _triggerIdOk(raw) {
+        return typeof raw === 'string' && TRIGGER_ID_RE.test(raw)
+            && raw !== '__proto__' && raw !== 'constructor' && raw !== 'prototype';
+    }
     // Same floor as drum-profiles.js / lib/midi_devices.py — empty string
     // allowed; rejects spaces and parentheses so raw MIDIIN2 (Foo) labels
     // cannot persist.
@@ -121,10 +127,33 @@
             const note = Math.round(Number(key));
             if (!Number.isInteger(note) || note < 0 || note > 127) continue;
             const piece = raw[key];
-            if (typeof piece !== 'string' || !TRIGGER_ID_RE.test(piece)) continue;
+            if (typeof piece !== 'string' || !_triggerIdOk(piece)) continue;
             out[String(note)] = piece;
         }
         return out;
+    }
+
+    function _sanitizeTriggers(raw) {
+        const out = [];
+        if (!Array.isArray(raw)) return out;
+        const seen = new Set();
+        for (let i = 0; i < raw.length; i += 1) {
+            const t = raw[i];
+            if (!t || typeof t !== 'object' || Array.isArray(t)) continue;
+            const id = typeof t.id === 'string' ? t.id : '';
+            if (!_triggerIdOk(id) || seen.has(id)) continue;
+            seen.add(id);
+            const nameRaw = t.name != null ? String(t.name).trim() : '';
+            const row = { id, name: nameRaw || id };
+            const zone = t.zone != null ? String(t.zone) : '';
+            if (zone && TRIGGER_ZONES[zone]) row.zone = zone;
+            out.push(row);
+        }
+        return out;
+    }
+
+    function _triggersOrEmpty(raw) {
+        return Array.isArray(raw) ? raw : [];
     }
 
     function _toWire(device) {
@@ -147,6 +176,9 @@
         if (includeNotes) {
             wire.notes = _sanitizeNotes(device.notes);
             wire.input = _sanitizeInput(device.input);
+            if (Array.isArray(device.triggers)) {
+                wire.triggers = _sanitizeTriggers(device.triggers);
+            }
             if (!wire.family) {
                 const catalog = _cache.typesById.get(typeId);
                 wire.family = (catalog && catalog.family) || 'drums';
@@ -164,6 +196,9 @@
                 cloned.notes = {};
             }
             cloned.input = _sanitizeInput(cloned.input);
+            if (Array.isArray(cloned.triggers)) {
+                cloned.triggers = _sanitizeTriggers(cloned.triggers);
+            }
             _cache.byId.set(cloned.id, cloned);
             return cloned;
         } catch (_) {
@@ -314,6 +349,42 @@
                 hit_detection: !!(state && state.hit_detection),
                 synth_volume: state && state.synth_volume,
             },
+            triggers: _triggersOrEmpty(prev.triggers),
+        });
+    }
+
+    function writeSourceId(deviceId, sourceId) {
+        const id = String(deviceId || '');
+        if (!DEVICE_ID_RE.test(id)) throw new Error('invalid device id');
+        const next = sourceId == null ? '' : String(sourceId);
+        if (!_sourceIdOk(next)) throw new Error('source_id must be a logical midi-input id');
+        const prev = _cache.byId.get(id) || { id };
+        if ((prev.source_id || '') === next) return Promise.resolve(prev);
+        return save({
+            id,
+            name: prev.name || id,
+            source_id: next,
+            device_type_id: prev.device_type_id || '',
+            family: prev.family || '',
+            notes: prev.notes && typeof prev.notes === 'object' ? prev.notes : {},
+            input: prev.input,
+            triggers: _triggersOrEmpty(prev.triggers),
+        });
+    }
+
+    function writeTriggers(deviceId, triggers) {
+        const id = String(deviceId || '');
+        if (!DEVICE_ID_RE.test(id)) throw new Error('invalid device id');
+        const prev = _cache.byId.get(id) || { id };
+        return save({
+            id,
+            name: prev.name || id,
+            source_id: prev.source_id || '',
+            device_type_id: prev.device_type_id || '',
+            family: prev.family || '',
+            notes: prev.notes && typeof prev.notes === 'object' ? prev.notes : {},
+            input: prev.input,
+            triggers: _triggersOrEmpty(triggers),
         });
     }
 
@@ -330,7 +401,7 @@
         if (!DEVICE_ID_RE.test(id)) throw new Error('invalid device id');
         const note = _requireMidiNote(midi);
         const piece = String(pieceId || '');
-        if (!TRIGGER_ID_RE.test(piece)) throw new Error('piece_id must be a catalog trigger id');
+        if (!_triggerIdOk(piece)) throw new Error('piece_id must be a catalog trigger id');
         const gen = ++_noteGen;
         const data = await _request(
             'PUT',
@@ -370,7 +441,7 @@
             const t = list[i];
             if (!t || typeof t !== 'object') continue;
             const id = typeof t.id === 'string' ? t.id : '';
-            if (!TRIGGER_ID_RE.test(id)) continue;
+            if (!_triggerIdOk(id)) continue;
             const midis = byPiece[id] || [];
             rows.push({
                 id,
@@ -418,6 +489,8 @@
         getActive,
         hasActive,
         writeInputFields,
+        writeSourceId,
+        writeTriggers,
         hydrate,
         subscribe,
         unsubscribe,

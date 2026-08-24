@@ -213,6 +213,19 @@ test('fixture plugin that declared drums shows the Drums tab', () => {
     assert.equal(drumsBtn.hidden, false);
 });
 
+test('_pluginSettingsLabel names the drums plugin Profiles', () => {
+    const sandbox = { result: null };
+    vm.createContext(sandbox);
+    vm.runInContext(
+        extractFunction(LOADER_JS, '_pluginSettingsLabel') + '\n'
+        + 'result = [_pluginSettingsLabel({ id: "drums", name: "Drum Highway" }),'
+        + '_pluginSettingsLabel({ id: "drum_highway_3d", name: "3D Drum Highway" })];\n',
+        sandbox,
+    );
+    assert.equal(sandbox.result[0], 'Profiles');
+    assert.equal(sandbox.result[1], '3D Drum Highway');
+});
+
 test('both 2D and 3D declaring drums mount as siblings without crashing', () => {
     const drums = makeEl('plugin-settings-drums');
     const fallback = makeEl('plugin-settings');

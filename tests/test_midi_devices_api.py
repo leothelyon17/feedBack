@@ -116,6 +116,7 @@ def test_list_device_types_has_prime_and_no_notes(client):
     types = r.json()["device_types"]
     ids = [t["id"] for t in types]
     assert "alesis-strata-prime" in ids
+    assert "generic" in ids
     for catalog in types:
         assert "notes" not in catalog
         assert "triggers" in catalog
@@ -134,6 +135,17 @@ def test_get_device_type_prime_has_triggers_no_notes(client):
     trigger_ids = [t["id"] for t in catalog["triggers"]]
     assert "kick" in trigger_ids
     assert "snare" in trigger_ids
+
+
+def test_get_device_type_generic_has_empty_triggers(client):
+    r = client.get("/api/midi/device-types/generic")
+    assert r.status_code == 200, r.text
+    catalog = r.json()
+    assert catalog["id"] == "generic"
+    assert catalog["name"] == "Generic"
+    assert catalog["family"] == "drums"
+    assert catalog["triggers"] == []
+    assert "notes" not in catalog
 
 
 def test_get_unknown_device_type_is_404(client):
@@ -175,6 +187,9 @@ def test_put_get_delete_device_round_trip(client, env):
     one = client.get("/api/midi/devices/living-room-ekit")
     assert one.status_code == 200
     assert one.json()["name"] == "Living room e-kit"
+    trigger_ids = [t["id"] for t in one.json()["triggers"]]
+    assert "kick" in trigger_ids
+    assert "snare" in trigger_ids
     deleted = client.delete("/api/midi/devices/living-room-ekit")
     assert deleted.status_code == 200
     assert deleted.json() == {"ok": True}
@@ -285,6 +300,68 @@ def test_put_note_piece_not_in_catalog_is_400(client, env):
     _srv, tmp = env
     on_disk = json.loads((tmp / "midi" / "devices" / "living-room-ekit.json").read_text())
     assert on_disk["notes"] == {}
+
+
+def test_put_note_piece_not_on_device_triggers_is_400(client, env):
+    _create_device(client, triggers=[{"id": "kick", "name": "Kick"}], notes={})
+    r = client.put(
+        "/api/midi/devices/living-room-ekit/notes/38",
+        json={"piece_id": "snare"},
+    )
+    assert r.status_code == 400
+    _srv, tmp = env
+    on_disk = json.loads((tmp / "midi" / "devices" / "living-room-ekit.json").read_text())
+    assert on_disk["notes"] == {}
+
+
+def test_put_note_custom_trigger_after_put_triggers(client, env):
+    _create_device(
+        client,
+        triggers=[{"id": "cowbell", "name": "Cowbell"}],
+        notes={},
+    )
+    r = client.put(
+        "/api/midi/devices/living-room-ekit/notes/56",
+        json={"piece_id": "cowbell"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["device"]["notes"]["56"] == "cowbell"
+    assert r.json()["device"]["triggers"] == [{"id": "cowbell", "name": "Cowbell"}]
+    _srv, tmp = env
+    on_disk = json.loads((tmp / "midi" / "devices" / "living-room-ekit.json").read_text())
+    assert on_disk["notes"]["56"] == "cowbell"
+
+
+def test_type_change_put_without_notes_resets_triggers(client, env):
+    created = client.post("/api/midi/devices", json={
+        "id": "kit-1",
+        "device_type_id": "alesis-strata-prime",
+        "name": "Kit",
+    })
+    assert created.status_code == 200, created.text
+    assert "kick" in [t["id"] for t in created.json()["triggers"]]
+    custom = _device_body(
+        device_id="kit-1",
+        name="Kit",
+        notes={"36": "kick"},
+        triggers=[{"id": "cowbell", "name": "Cowbell"}],
+    )
+    assert client.put("/api/midi/devices/kit-1", json=custom).status_code == 200
+    r = client.put("/api/midi/devices/kit-1", json={
+        "id": "kit-1",
+        "name": "Kit",
+        "device_type_id": "generic",
+        "family": "drums",
+        "source_id": "web-midi::pad-1",
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["device_type_id"] == "generic"
+    assert r.json()["notes"] == {}
+    assert r.json()["triggers"] == []
+    _srv, tmp = env
+    on_disk = json.loads((tmp / "midi" / "devices" / "kit-1.json").read_text())
+    assert on_disk["notes"] == {}
+    assert on_disk["triggers"] == []
 
 
 def test_put_note_conflicts_while_scoring_session_playing(client, env):
