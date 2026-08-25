@@ -176,6 +176,7 @@ test('public open() surfaces the live handle (in-page only)', async () => {
 // self-registers (the shared harness has no navigator, so it normally skips).
 function loadWithWebMidi(inputs) {
     const window = createWindow();
+    window.isSecureContext = true;
     window.navigator = {
         requestMIDIAccess: async () => ({
             onstatechange: null,
@@ -237,6 +238,7 @@ test('second discover reuses MIDIAccess and keeps onmidimessage', async () => {
         async open() { this.opened = true; },
     };
     const window = createWindow();
+    window.isSecureContext = true;
     window.navigator = {
         requestMIDIAccess: async () => {
             calls += 1;
@@ -365,4 +367,82 @@ test('diagnostics are redaction-safe (no device labels, no raw messages)', async
     const serialized = JSON.stringify(contrib);
     assert.ok(!serialized.includes('My Keyboard'), 'device labels are redacted from diagnostics');
     for (const s of contrib.sources) assert.ok(!('label' in s), 'source entries carry no label');
+});
+
+function seedSecureContextWarning(window, origin) {
+    const el = {
+        id: 'midi-secure-context-warning',
+        textContent: '',
+        hidden: true,
+        className: 'hidden text-xs text-gray-300 mb-3',
+        attributes: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' },
+        setAttribute(k, v) { this.attributes[k] = String(v); },
+        getAttribute(k) { return this.attributes[k] || null; },
+        classList: {
+            remove(c) {
+                if (c === 'hidden') {
+                    el.hidden = false;
+                    el.className = el.className.replace(/\bhidden\b/g, '').trim();
+                }
+            },
+        },
+    };
+    window.__elements.set('midi-secure-context-warning', el);
+    window.location = { origin: origin };
+    return el;
+}
+
+test('INIT-006/SPEC-002: insecure origin warns and never calls requestMIDIAccess', async () => {
+    let midiCalls = 0;
+    const window = createWindow({ isSecureContext: false });
+    const warning = seedSecureContextWarning(window, 'http://192.168.1.10:8000');
+    window.navigator = {
+        requestMIDIAccess: async () => {
+            midiCalls += 1;
+            throw new Error('requestMIDIAccess must not run on an insecure origin');
+        },
+    };
+    const context = vm.createContext(window);
+    vm.runInContext(fs.readFileSync(CAPABILITIES_JS, 'utf8'), context, { filename: CAPABILITIES_JS });
+    vm.runInContext(fs.readFileSync(MIDI_INPUT_JS, 'utf8'), context, { filename: MIDI_INPUT_JS });
+    assert.equal(midiCalls, 0, 'must not request MIDI access while !isSecureContext');
+    assert.match(warning.textContent, /Warning:/);
+    assert.match(warning.textContent, /HTTPS or localhost/);
+    assert.match(warning.textContent, /http:\/\/192\.168\.1\.10:8000/);
+    assert.equal(warning.hidden, false);
+    assert.equal(warning.getAttribute('aria-live'), 'polite');
+    assert.ok(!/\bhidden\b/.test(warning.className), 'color is not the only signal: warning is unhidden');
+    if (window.feedBack.midiInput && typeof window.feedBack.midiInput.discover === 'function') {
+        await window.feedBack.midiInput.discover();
+    }
+    assert.equal(midiCalls, 0, 'discover must still skip requestMIDIAccess');
+});
+
+test('INIT-006/SPEC-002: localhost remains a secure context (no warning)', async () => {
+    const window = createWindow({ isSecureContext: true, location: { origin: 'http://localhost:8000' } });
+    const warning = seedSecureContextWarning(window, 'http://localhost:8000');
+    window.navigator = {
+        requestMIDIAccess: async () => ({
+            onstatechange: null,
+            inputs: new Map(),
+        }),
+    };
+    const context = vm.createContext(window);
+    vm.runInContext(fs.readFileSync(CAPABILITIES_JS, 'utf8'), context, { filename: CAPABILITIES_JS });
+    vm.runInContext(fs.readFileSync(MIDI_INPUT_JS, 'utf8'), context, { filename: MIDI_INPUT_JS });
+    assert.equal(warning.textContent, '');
+    assert.equal(warning.hidden, true);
+    await window.feedBack.midiInput.discover();
+});
+
+test('INIT-006/SPEC-002: Settings MIDI warning is a live region (color is not the only signal)', () => {
+    const html = fs.readFileSync(path.join(ROOT, 'static', 'v3', 'index.html'), 'utf8');
+    assert.match(html, /id="midi-secure-context-warning"/);
+    assert.match(html, /id="midi-secure-context-warning"[^>]*aria-live="polite"/);
+    assert.match(html, /id="midi-secure-context-warning"[^>]*role="status"/);
+    const midiJs = fs.readFileSync(MIDI_INPUT_JS, 'utf8');
+    assert.match(midiJs, /isSecureContext/);
+    assert.match(midiJs, /HTTPS or localhost/);
+    assert.match(midiJs, /_warnInsecureMidiOrigin\(\)/);
+    assert.match(midiJs, /if\s*\(!_midiOriginIsSecure\(\)\)/);
 });

@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **Named judge plane + insecure-MIDI warning (INIT-006/SPEC-002).**
+  `highway.getJudgeTime()` aliases the chart-aligned clock (`getTime()`).
+  Guitar A/V (`av_offset_ms` / `setAvOffset`) still moves gem draw time
+  (`currentTime`) only. On a non-secure origin, MIDI Detect shows a
+  visible `aria-live` warning naming HTTPS or localhost and does not
+  call `requestMIDIAccess` (`localhost` HTTP stays a secure context).
 - **3D drum highway judges on the MIDI clock (INIT-004/SPEC-005).** Bundled
   `drum_highway_3d` maps each MIDI `timeStamp` onto `highway.getTime()`,
   subtracts `feedBack.drumTiming.getOffsetMs()` (0 when that getter is

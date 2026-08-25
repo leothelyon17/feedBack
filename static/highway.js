@@ -151,13 +151,12 @@ function createHighway() {
             session.recordBridgeHit({ bridgeId, domain, legacySurface, participantId: 'core.highway', outcome: outcome || 'handled', reason: reason || '' });
         } catch (_) { /* audio-session diagnostics are best-effort */ }
     }
-    // Two notions of "now" — kept deliberately separate:
-    //   chartTime — audio-aligned clock. What getTime() exposes to plugins
-    //               (scoring, note detection, etc.) and what setTime() receives.
-    //   currentTime — rendering clock. Equal to chartTime + avOffsetSec, so the
-    //                 draw code can shift visual notes forward to compensate
-    //                 for audio-output pipeline latency without plugins having
-    //                 to care about the offset.
+    // Two notions of "now" — kept deliberately separate (ADR-001 / INIT-006/SPEC-002):
+    //   chartTime — audio-aligned clock. What getTime() / getJudgeTime() expose
+    //               to plugins (scoring, note detection, etc.) and what setTime()
+    //               receives. This is the judge plane. Do not add avOffsetSec.
+    //   currentTime — render plane. Equal to judge + avOffsetSec, so gems can
+    //                 shift for guitar A/V without moving drum verdicts.
     // avOffsetSec is set by setAvOffset(ms); default 0 means old behavior.
     hwState.chartTime = 0;
     hwState.currentTime = 0;
@@ -2568,6 +2567,9 @@ function createHighway() {
             // offset is applied on the way out.
             return hwState._chartAnchorAudioT + (hwState._chartObservedRate * elapsedMs) / 1000 + hwState.songOffset;
         },
+        // Judge plane (ADR-001 / INIT-006/SPEC-002): named alias of getTime().
+        // Chart-aligned input time. Render plane is currentTime = judge + avOffsetSec.
+        getJudgeTime() { return this.getTime(); },
         // Returns the feedBack <audio> element so plugins don't have to
         // reach for `document.getElementById('audio')` directly. In JUCE
         // mode the same element is shimmed: `audio.currentTime` reads

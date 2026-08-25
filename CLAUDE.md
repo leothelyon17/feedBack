@@ -348,7 +348,7 @@ window.feedBackViz_piano.matchesArrangement = function (songInfo) {
 
 Plugins that add a layer on top of whichever visualization is active — HUDs, fretboard diagrams, chord labels, practice feedback — don't replace the renderer. They manage their own canvas, their own rAF loop, and a toggle button somewhere visible (typically a navbar pill), reading public highway state via the getters:
 
-- `highway.getTime()` / `highway.getBeats()` — current playback position
+- `highway.getTime()` / `highway.getJudgeTime()` / `highway.getBeats()` — chart-aligned playback position (judge plane). `getJudgeTime()` is a named alias of `getTime()` (INIT-006/SPEC-002). Gems draw on render-plane `currentTime` (`getJudgeTime() + avOffsetSec`). Do not score hits on `bundle.currentTime`.
 - `highway.getNotes()` / `highway.getChords()` — raw arrays containing every note/chord in the chart regardless of the current difficulty level
 - `highway.getFilteredNotes()` / `highway.getFilteredChords()` — difficulty-filtered variants. Returns the master-difficulty-filtered arrays when the song has phrase-level data (slider active); falls through to the raw arrays for songs with a single difficulty level (slider disabled). Plugins that process only the notes the player is currently expected to play should use these instead of `getNotes()` / `getChords()`
 - `highway.hasPhraseData()` — returns `true` when the current song has phrase-level difficulty ladder data (i.e. the mastery slider is active and `getFilteredNotes()` / `getFilteredChords()` return a filtered subset). Use this to gate logic that only makes sense when difficulty filtering is available

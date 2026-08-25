@@ -61,6 +61,8 @@ function createWindow(options = {}) {
     };
     window.window = window;
     window.globalThis = window;
+    window.isSecureContext = options.isSecureContext !== false;
+    window.location = options.location || { origin: 'http://localhost:8000' };
     return window;
 }
 
