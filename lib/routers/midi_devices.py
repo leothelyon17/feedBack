@@ -4,8 +4,10 @@ Catalogs have no default notes map. Device documents persist via
 lib/midi_devices.py. Learn/note and whole-device writes 409 while a
 highway scoring session is playing or paused (reuses SPEC-002 flag).
 Public DTO includes optional Calibration `timing` when set (omit = Not
-set). PUT merge lives in save_device (omit preserves, null clears).
-INIT-003/SPEC-009, INIT-004/SPEC-007.
+set), including `profiles` and `audio_latency_hint_ms` when the data
+layer has them. PUT omit preserves all timing keys; a partial `timing`
+object deep-merges known keys (unknown keys ignored). Null clears.
+INIT-003/SPEC-009, INIT-004/SPEC-007, INIT-006/SPEC-006.
 """
 
 from __future__ import annotations
@@ -41,6 +43,18 @@ router = APIRouter()
 _DEVICE_BODY_MAX = 64 * 1024
 _NOTE_BODY_MAX = 4 * 1024
 _DANGEROUS_KEYS = frozenset({"__proto__", "constructor", "prototype"})
+# Public timing DTO keys (must stay aligned with midi_devices._TIMING_CANONICAL_KEYS).
+# Partial PUT deep-merges these; anything else on the body is ignored.
+_TIMING_DTO_KEYS = (
+    "offset_ms",
+    "measured_at",
+    "n",
+    "median_abs_error_ms",
+    "origin",
+    "audio_backend",
+    "profiles",
+    "audio_latency_hint_ms",
+)
 
 
 def _has_dangerous_keys(obj: object) -> bool:
@@ -96,10 +110,13 @@ def _device_public(device: dict) -> dict:
         "input": device.get("input"),
     }
     # INIT-004/SPEC-007: omit when Not set so midiDevices cache stays
-    # omit-means-unset. Canonical shape already comes from save_device.
+    # omit-means-unset. INIT-006/SPEC-006: profiles + hint pass through
+    # when the data layer has them; unknown keys stay off the wire.
     timing = device.get("timing") if "timing" in device else None
     if isinstance(timing, dict):
-        out["timing"] = dict(timing)
+        public_timing = {key: timing[key] for key in _TIMING_DTO_KEYS if key in timing}
+        if public_timing:
+            out["timing"] = public_timing
     return out
 
 
@@ -162,6 +179,33 @@ def _require_piece_id_for_device(device: dict, body: bytes) -> str:
     return piece_id
 
 
+def _deep_merge_timing(prior: dict, incoming: dict) -> dict:
+    """Partial timing is deep-merge for known keys; unknown keys ignored.
+
+    INIT-006/SPEC-006 aud-1. Omitted known keys (profiles, hint, offset,
+    tag) stay from prior so a body with only offset_ms cannot wipe the
+    rest. save_device still validates and persist-merges profiles.
+    """
+    merged = {key: prior[key] for key in _TIMING_DTO_KEYS if key in prior}
+    for key in _TIMING_DTO_KEYS:
+        if key in incoming:
+            merged[key] = incoming[key]
+    return merged
+
+
+def _apply_partial_timing_merge(obj: dict, device_id: str) -> dict:
+    incoming = obj.get("timing")
+    if not isinstance(incoming, dict):
+        return obj
+    current = load_device(appstate.config_dir, device_id)
+    prior = current.get("timing") if isinstance(current, dict) else None
+    if not isinstance(prior, dict):
+        return obj
+    obj = dict(obj)
+    obj["timing"] = _deep_merge_timing(prior, incoming)
+    return obj
+
+
 def _persist_device_from_obj(obj: dict, device_id: str | None) -> dict:
     if device_id is not None:
         obj = dict(obj)
@@ -172,6 +216,7 @@ def _persist_device_from_obj(obj: dict, device_id: str | None) -> dict:
     dest = device_path(appstate.config_dir, did)
     if dest is None:
         raise HTTPException(status_code=400, detail="device id rejected by path containment")
+    obj = _apply_partial_timing_merge(obj, did)
     if "notes" not in obj:
         type_id = obj.get("device_type_id")
         if not isinstance(type_id, str):

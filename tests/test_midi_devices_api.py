@@ -1,7 +1,8 @@
 """HTTP tests for /api/midi/devices, device-types, and active_midi_device.
 
 INIT-003/SPEC-009. Persist via lib/midi_devices.py helpers. Reuses the
-SPEC-002 scoring-session Learn lock.
+SPEC-002 scoring-session Learn lock. INIT-006/SPEC-006 covers GET/PUT
+round-trip of timing.profiles and audio_latency_hint_ms.
 """
 
 from __future__ import annotations
@@ -109,6 +110,30 @@ def _timing(**overrides) -> dict:
         "origin": "web-midi",
         "audio_backend": "html5",
     }
+    body.update(overrides)
+    return body
+
+
+def _profile_row(
+    origin: str = "web-midi",
+    audio_backend: str = "html5",
+    offset_ms: float = 12.5,
+) -> dict:
+    return {
+        "origin": origin,
+        "audio_backend": audio_backend,
+        "offset_ms": offset_ms,
+    }
+
+
+def _timing_with_profiles(**overrides) -> dict:
+    body = _timing(
+        profiles=[
+            _profile_row(),
+            _profile_row(origin="desktop", audio_backend="juce", offset_ms=40.0),
+        ],
+        audio_latency_hint_ms=25.0,
+    )
     body.update(overrides)
     return body
 
@@ -911,3 +936,133 @@ def test_list_devices_runs_overlay_kit_migrate(client, env):
     assert got.status_code == 200
     assert got.json()["notes"]["24"] == "kick"
     assert (tmp / "midi" / "overlay-kit-notes-migrated").is_file()
+
+
+# ── INIT-006/SPEC-006: profiles + audio_latency_hint_ms DTO ──────────────────
+
+
+def test_get_returns_timing_profiles_and_audio_latency_hint(client, env):
+    seeded = _timing_with_profiles()
+    r = client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=seeded),
+    )
+    assert r.status_code == 200, r.text
+    got = r.json()["timing"]
+    assert got["profiles"] == seeded["profiles"]
+    assert got["audio_latency_hint_ms"] == 25.0
+    one = client.get("/api/midi/devices/living-room-ekit")
+    assert one.status_code == 200, one.text
+    assert one.json()["timing"]["profiles"] == seeded["profiles"]
+    assert one.json()["timing"]["audio_latency_hint_ms"] == 25.0
+    listed = client.get("/api/midi/devices")
+    assert listed.status_code == 200, listed.text
+    listed_timing = listed.json()["devices"][0]["timing"]
+    assert listed_timing["profiles"] == seeded["profiles"]
+    assert listed_timing["audio_latency_hint_ms"] == 25.0
+    on_disk = json.loads(
+        (env[1] / "midi" / "devices" / "living-room-ekit.json").read_text()
+    )
+    assert on_disk["timing"]["profiles"] == seeded["profiles"]
+    assert on_disk["timing"]["audio_latency_hint_ms"] == 25.0
+
+
+def test_put_without_timing_preserves_profiles_hint_and_offset(client, env):
+    seeded = client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=_timing_with_profiles(offset_ms=40)),
+    )
+    assert seeded.status_code == 200, seeded.text
+    prior = seeded.json()["timing"]
+    update = _device_body(name="Renamed", notes={"36": "kick"})
+    assert "timing" not in update
+    r = client.put("/api/midi/devices/living-room-ekit", json=update)
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "Renamed"
+    assert r.json()["notes"] == {"36": "kick"}
+    timing = r.json()["timing"]
+    assert timing["offset_ms"] == 40.0
+    assert timing["profiles"] == prior["profiles"]
+    assert timing["audio_latency_hint_ms"] == 25.0
+    got = client.get("/api/midi/devices/living-room-ekit").json()["timing"]
+    assert got["offset_ms"] == 40.0
+    assert got["profiles"] == prior["profiles"]
+    assert got["audio_latency_hint_ms"] == 25.0
+    on_disk = json.loads(
+        (env[1] / "midi" / "devices" / "living-room-ekit.json").read_text()
+    )
+    assert on_disk["timing"]["offset_ms"] == 40.0
+    assert on_disk["timing"]["profiles"] == prior["profiles"]
+    assert on_disk["timing"]["audio_latency_hint_ms"] == 25.0
+
+
+def test_put_timing_only_offset_preserves_profiles_and_hint(client, env):
+    seeded = client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=_timing_with_profiles()),
+    )
+    assert seeded.status_code == 200, seeded.text
+    prior_profiles = seeded.json()["timing"]["profiles"]
+    update = _device_body(timing={"offset_ms": 18.0, "ignored_key": "drop-me"})
+    r = client.put("/api/midi/devices/living-room-ekit", json=update)
+    assert r.status_code == 200, r.text
+    timing = r.json()["timing"]
+    assert timing["offset_ms"] == 18.0
+    assert "ignored_key" not in timing
+    assert timing["audio_latency_hint_ms"] == 25.0
+    assert timing["origin"] == "web-midi"
+    assert timing["audio_backend"] == "html5"
+    got_profiles = {
+        (row["origin"], row["audio_backend"], row["offset_ms"])
+        for row in timing["profiles"]
+    }
+    prior_keys = {
+        (row["origin"], row["audio_backend"], row["offset_ms"])
+        for row in prior_profiles
+    }
+    assert ("desktop", "juce", 40.0) in got_profiles
+    assert ("web-midi", "html5", 18.0) in got_profiles
+    assert ("web-midi", "html5", 12.5) not in got_profiles
+    assert ("desktop", "juce", 40.0) in prior_keys
+    got = client.get("/api/midi/devices/living-room-ekit").json()["timing"]
+    assert got["offset_ms"] == 18.0
+    assert got["audio_latency_hint_ms"] == 25.0
+    assert "ignored_key" not in got
+    on_disk = json.loads(
+        (env[1] / "midi" / "devices" / "living-room-ekit.json").read_text()
+    )
+    assert on_disk["timing"]["audio_latency_hint_ms"] == 25.0
+    assert "ignored_key" not in on_disk["timing"]
+
+
+def test_put_timing_empty_profiles_list_keeps_prior_via_data_merge(client):
+    seeded = client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=_timing_with_profiles()),
+    )
+    assert seeded.status_code == 200, seeded.text
+    r = client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=_timing(profiles=[], audio_latency_hint_ms=25.0)),
+    )
+    assert r.status_code == 200, r.text
+    origins = {row["origin"] for row in r.json()["timing"]["profiles"]}
+    assert "web-midi" in origins
+    assert "desktop" in origins
+    assert r.json()["timing"]["audio_latency_hint_ms"] == 25.0
+
+
+def test_put_timing_still_rejects_device_id_escape(client, env):
+    body = _device_body(timing=_timing_with_profiles())
+    r = client.put("/api/midi/devices/%2e%2e%2fconfig", json=body)
+    assert r.status_code == 400
+    r2 = client.put("/api/midi/devices/foo%2Fbar", json=body)
+    assert r2.status_code == 400
+    devices_dir = env[1] / "midi" / "devices"
+    if devices_dir.exists():
+        assert not list(devices_dir.glob("*.json"))
+    config_json = env[1] / "config.json"
+    if config_json.is_file():
+        dumped = config_json.read_text()
+        assert "audio_latency_hint_ms" not in dumped
+        assert "profiles" not in dumped

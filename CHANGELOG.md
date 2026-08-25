@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **MIDI device API round-trips timing profiles and audio-latency hint
+  (INIT-006/SPEC-006).** GET `/api/midi/devices` and GET by id include
+  `timing.profiles` and `timing.audio_latency_hint_ms` when the device
+  document has them. PUT that omits `timing` still preserves every timing
+  key (offset, tag, profiles, hint). A partial `timing` body (for example
+  only `offset_ms`) deep-merges known keys and does not drop profiles or
+  the hint; unknown keys are ignored. Path containment is unchanged.
 - **MIDI device timing profiles (INIT-006/SPEC-005).** Device `timing`
   may carry an optional `profiles` list of `{origin, audio_backend,
   offset_ms}` and an optional `audio_latency_hint_ms`. Old files with
