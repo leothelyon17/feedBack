@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **3D drums apply MIDI Hit detection.** Checking Settings → MIDI → Hit
+  detection now reaches the 3D highway (it previously only saved on the
+  device document). The in-play HUD says "Hit detection off" instead of
+  a silent 0/0 when scoring is gated.
+
 ### Changed
 - **Settings → Drums is Profiles first.** The 2D plugin panel is titled
   Profiles (create / rename / attach device / lane map / Make active).

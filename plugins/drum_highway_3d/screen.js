@@ -1235,6 +1235,26 @@
         return notes;
     }
 
+    function _applyDeviceInput(device) {
+        const input = device && device.input && typeof device.input === 'object' && !Array.isArray(device.input)
+            ? device.input : null;
+        if (!input) return;
+        const patch = {};
+        if (typeof input.midi_channel === 'number') patch.midiChannel = input.midi_channel;
+        if (typeof input.hit_detection === 'boolean') patch.hitDetection = input.hit_detection;
+        if (typeof input.synth_volume === 'number') patch.synthVolume = input.synth_volume;
+        if (Object.keys(patch).length) _writeSharedSettings(patch);
+    }
+
+    function _recordTimingDebug(result, ctx) {
+        try {
+            const dbg = (typeof window !== 'undefined') ? window.feedBackDrumDebug : null;
+            if (dbg && typeof dbg.recordJudge === 'function') {
+                dbg.recordJudge(result, ctx);
+            }
+        } catch (_) { /* optional plugin debug module */ }
+    }
+
     function _applyDeviceNotes(notes) {
         const raw = (notes && typeof notes === 'object' && !Array.isArray(notes)) ? notes : {};
         const overlay = _parseKitNotes({ notes: raw });
@@ -1270,6 +1290,7 @@
             const device = await md.get(id);
             if (!_isCurrentKitOp(gen)) return { ok: false, stale: true };
             _applyDeviceNotes(_notesFromDevice(device));
+            _applyDeviceInput(device);
             _attachedDeviceId = id;
             return { ok: true, device };
         } catch (_) {
@@ -2870,6 +2891,12 @@
 
         function _refreshHud() {
             if (!_hudEl) return;
+            if (!_inputSettings.hitDetection) {
+                _hudEl.innerHTML =
+                    '<div style="color:#94a3b8;font-weight:600;font-size:14px">Hit detection off</div>' +
+                    '<div style="color:#64748b;font-size:11px">Enable under Settings → MIDI</div>';
+                return;
+            }
             const total = _hits + _misses;
             const pct = total ? Math.round((_hits / total) * 100) : 0;
             const comboColor = _streak >= 30 ? '#fde047' :
@@ -3108,6 +3135,10 @@
             const lane = piece !== undefined ? PIECE_TO_LANE[piece] : undefined;
             if (lane === undefined) {
                 _laneFlashes.push({ lane: -1, wall: performance.now(), kind: 'wrong' });
+                _recordTimingDebug({ kind: 'skip', reason: 'unmapped' }, {
+                    offsetMs: _readDrumOffsetMs(),
+                    hitDetection: _inputSettings.hitDetection,
+                });
                 return;
             }
 
@@ -3117,6 +3148,11 @@
                 // to the demo pattern feels alive.
                 _laneFlashes.push({ lane, wall: performance.now(), kind: 'hit' });
                 _spawnHitFx(lane, null, false);
+                _recordTimingDebug({ kind: 'skip', reason: 'empty-chart' }, {
+                    offsetMs: _readDrumOffsetMs(),
+                    hitDetection: _inputSettings.hitDetection,
+                    playedLane: lane,
+                });
                 return;
             }
 
@@ -3125,6 +3161,11 @@
             if (!_inputSettings.hitDetection) {
                 _laneFlashes.push({ lane, wall: performance.now(), kind: 'hit' });
                 _spawnHitFx(lane, null, false);
+                _recordTimingDebug({ kind: 'skip', reason: 'hit-detection-off' }, {
+                    offsetMs: _readDrumOffsetMs(),
+                    hitDetection: false,
+                    playedLane: lane,
+                });
                 return;
             }
 
@@ -3132,6 +3173,11 @@
                 notes: _latestNotes,
                 hitKeys: _hitKeys,
                 piece,
+            });
+            _recordTimingDebug(result, {
+                offsetMs: _readDrumOffsetMs(),
+                hitDetection: true,
+                playedLane: result && result.lane != null ? result.lane : lane,
             });
             if (!result || result.kind === 'skip') return;
 
@@ -4972,6 +5018,7 @@
         _readKitConfig,
         // INIT-003/SPEC-013: MIDI device notes consume seams (vm tests).
         _applyDeviceNotes,
+        _applyDeviceInput,
         _refetchDeviceNotes,
         _hydrateDeviceNotes,
         _onMidiDeviceChange,
