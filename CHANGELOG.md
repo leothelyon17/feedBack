@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **MIDI device API round-trips `timing` (INIT-004/SPEC-007).** GET/list
+  include the Calibration object when set and omit the key when Not set.
+  PUT `/api/midi/devices` and PUT `/api/midi/devices/{id}` persist `timing`
+  through `save_device` (omit preserves, `null` clears). A notes/input PUT
+  that forgets the key does not wipe a prior save; the response still
+  returns the preserved object. No `/api/settings` drum-timing key.
 - **MIDI device `timing` field (INIT-004/SPEC-006).** Device JSON may carry
   an optional Calibration object `{offset_ms, measured_at, n,
   median_abs_error_ms, origin, audio_backend}`. Omitted key is Not set

@@ -100,6 +100,19 @@ def _profile_body(
     return body
 
 
+def _timing(**overrides) -> dict:
+    body = {
+        "offset_ms": 12.5,
+        "measured_at": "2026-08-24T12:00:00Z",
+        "n": 24,
+        "median_abs_error_ms": 8.2,
+        "origin": "web-midi",
+        "audio_backend": "html5",
+    }
+    body.update(overrides)
+    return body
+
+
 def _create_device(client, **overrides) -> dict:
     body = _device_body(**overrides)
     r = client.put(f"/api/midi/devices/{body['id']}", json=body)
@@ -702,6 +715,183 @@ def test_kit_note_routes_remain(client):
     )
     assert r.status_code == 200, r.text
     assert r.json()["kit"]["notes"]["24"] == "kick"
+
+
+# ── INIT-004/SPEC-007: public DTO round-trips timing ──────────────────────────
+
+
+def test_get_and_list_omit_timing_when_unset(client):
+    created = _create_device(client)
+    assert "timing" not in created
+    one = client.get("/api/midi/devices/living-room-ekit")
+    assert one.status_code == 200, one.text
+    assert "timing" not in one.json()
+    listed = client.get("/api/midi/devices")
+    assert listed.status_code == 200, listed.text
+    devices = listed.json()["devices"]
+    assert len(devices) == 1
+    assert "timing" not in devices[0]
+
+
+def test_put_timing_persists_and_returns_canonical(client, env):
+    body = _device_body(timing=_timing())
+    r = client.put("/api/midi/devices/living-room-ekit", json=body)
+    assert r.status_code == 200, r.text
+    got = r.json()["timing"]
+    assert got["offset_ms"] == 12.5
+    assert got["audio_backend"] == "html5"
+    assert got["origin"] == "web-midi"
+    assert got["n"] == 24
+    assert "extra" not in got
+    listed = client.get("/api/midi/devices").json()["devices"][0]
+    assert listed["timing"] == got
+    one = client.get("/api/midi/devices/living-room-ekit")
+    assert one.json()["timing"] == got
+    on_disk = json.loads(
+        (env[1] / "midi" / "devices" / "living-room-ekit.json").read_text()
+    )
+    assert on_disk["timing"] == got
+
+
+def test_collection_put_timing_round_trip(client):
+    r = client.put("/api/midi/devices", json=_device_body(timing=_timing()))
+    assert r.status_code == 200, r.text
+    assert r.json()["timing"]["offset_ms"] == 12.5
+    one = client.get("/api/midi/devices/living-room-ekit")
+    assert one.json()["timing"]["offset_ms"] == 12.5
+
+
+def test_put_timing_huge_offset_returns_clamped(client):
+    body = _device_body(timing=_timing(offset_ms=1e9))
+    r = client.put("/api/midi/devices/living-room-ekit", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["timing"]["offset_ms"] == 250.0
+    got = client.get("/api/midi/devices/living-room-ekit").json()
+    assert got["timing"]["offset_ms"] == 250.0
+
+
+def test_put_without_timing_preserves_and_returns_it(client, env):
+    seeded = client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=_timing(offset_ms=40)),
+    )
+    assert seeded.status_code == 200, seeded.text
+    assert seeded.json()["timing"]["offset_ms"] == 40.0
+    update = _device_body(name="Renamed", notes={"36": "kick"})
+    assert "timing" not in update
+    r = client.put("/api/midi/devices/living-room-ekit", json=update)
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "Renamed"
+    assert r.json()["notes"] == {"36": "kick"}
+    assert r.json()["timing"]["offset_ms"] == 40.0
+    got = client.get("/api/midi/devices/living-room-ekit").json()
+    assert got["timing"]["offset_ms"] == 40.0
+    on_disk = json.loads(
+        (env[1] / "midi" / "devices" / "living-room-ekit.json").read_text()
+    )
+    assert on_disk["timing"]["offset_ms"] == 40.0
+
+
+def test_put_note_response_still_includes_timing(client):
+    client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=_timing(offset_ms=18)),
+    )
+    r = client.put(
+        "/api/midi/devices/living-room-ekit/notes/36",
+        json={"piece_id": "kick"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["device"]["notes"]["36"] == "kick"
+    assert r.json()["device"]["timing"]["offset_ms"] == 18.0
+
+
+def test_put_timing_null_clears_and_get_omits(client, env):
+    client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=_timing()),
+    )
+    r = client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=None),
+    )
+    assert r.status_code == 200, r.text
+    assert "timing" not in r.json()
+    got = client.get("/api/midi/devices/living-room-ekit")
+    assert got.status_code == 200, got.text
+    assert "timing" not in got.json()
+    listed = client.get("/api/midi/devices").json()["devices"][0]
+    assert "timing" not in listed
+    on_disk = json.loads(
+        (env[1] / "midi" / "devices" / "living-room-ekit.json").read_text()
+    )
+    assert "timing" not in on_disk
+
+
+def test_put_timing_conflicts_while_scoring_session_playing(client, env):
+    seed = client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=_timing(offset_ms=12.5)),
+    )
+    assert seed.status_code == 200, seed.text
+    dest = env[1] / "midi" / "devices" / "living-room-ekit.json"
+    before = json.loads(dest.read_text())
+    lock = client.put("/api/drums/scoring-session", json={"state": "playing"})
+    assert lock.status_code == 200
+    r = client.put(
+        "/api/midi/devices/living-room-ekit",
+        json=_device_body(timing=_timing(offset_ms=40)),
+    )
+    assert r.status_code == 409
+    assert "device notes" in r.json()["detail"]
+    after = json.loads(dest.read_text())
+    assert after == before
+    got = client.get("/api/midi/devices/living-room-ekit").json()
+    assert got["timing"]["offset_ms"] == 12.5
+
+
+def test_put_device_oversize_body_is_413(client, env):
+    body = _device_body()
+    body["name"] = "x" * (64 * 1024)
+    r = client.put("/api/midi/devices/living-room-ekit", json=body)
+    assert r.status_code == 413
+    assert not (env[1] / "midi" / "devices" / "living-room-ekit.json").exists()
+
+
+def test_put_timing_proto_key_is_400(client, env):
+    body = _device_body(timing=_timing())
+    body["timing"]["__proto__"] = {}
+    r = client.put("/api/midi/devices/living-room-ekit", json=body)
+    assert r.status_code == 400
+    assert not (env[1] / "midi" / "devices" / "living-room-ekit.json").exists()
+
+
+def test_put_invalid_timing_backend_is_400(client, env):
+    body = _device_body(timing=_timing(audio_backend="wasapi"))
+    r = client.put("/api/midi/devices/living-room-ekit", json=body)
+    assert r.status_code == 400
+    assert not (env[1] / "midi" / "devices" / "living-room-ekit.json").exists()
+
+
+def test_settings_post_drum_timing_key_does_not_become_av_offset(client, env):
+    prior = client.get("/api/settings").json()
+    prior_av = prior.get("av_offset_ms")
+    r = client.post("/api/settings", json={
+        "drum_timing_ms": 42,
+        "drum_offset_ms": 99,
+        "timing": {"offset_ms": 12.5, "audio_backend": "html5"},
+    })
+    assert r.status_code == 200, r.text
+    assert "error" not in r.json()
+    got = client.get("/api/settings").json()
+    assert "drum_timing_ms" not in got
+    assert "drum_offset_ms" not in got
+    assert got.get("av_offset_ms") == prior_av
+    cfg = _cfg(env[1])
+    assert "drum_timing_ms" not in cfg
+    assert "drum_offset_ms" not in cfg
+    assert "timing" not in cfg
+    assert cfg.get("av_offset_ms") == prior_av
 
 
 def test_list_devices_runs_overlay_kit_migrate(client, env):

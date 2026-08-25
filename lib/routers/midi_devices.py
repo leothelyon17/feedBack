@@ -3,7 +3,9 @@
 Catalogs have no default notes map. Device documents persist via
 lib/midi_devices.py. Learn/note and whole-device writes 409 while a
 highway scoring session is playing or paused (reuses SPEC-002 flag).
-INIT-003/SPEC-009.
+Public DTO includes optional Calibration `timing` when set (omit = Not
+set). PUT merge lives in save_device (omit preserves, null clears).
+INIT-003/SPEC-009, INIT-004/SPEC-007.
 """
 
 from __future__ import annotations
@@ -83,7 +85,7 @@ def _reject_if_learn_locked() -> None:
 
 def _device_public(device: dict) -> dict:
     notes = device.get("notes") or {}
-    return {
+    out = {
         "id": device["id"],
         "name": device.get("name") or device["id"],
         "source_id": device.get("source_id") or "",
@@ -93,6 +95,12 @@ def _device_public(device: dict) -> dict:
         "triggers": list(device.get("triggers") or []),
         "input": device.get("input"),
     }
+    # INIT-004/SPEC-007: omit when Not set so midiDevices cache stays
+    # omit-means-unset. Canonical shape already comes from save_device.
+    timing = device.get("timing") if "timing" in device else None
+    if isinstance(timing, dict):
+        out["timing"] = dict(timing)
+    return out
 
 
 def _type_public(catalog: dict) -> dict:
