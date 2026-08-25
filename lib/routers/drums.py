@@ -1,8 +1,9 @@
-"""Drums vocabulary and user-kit CRUD (/api/drums/...).
+"""Drums vocabulary, user-kit CRUD, and named profile CRUD (/api/drums/...).
 
 Shipped kits live under data/drums/kits/ (read-only). User kits persist
 under {config_dir}/drums/ via safepath.safe_join — never under the
-shipped tree. INIT-001/SPEC-002.
+shipped tree. Profiles persist under drums/profiles/ via SPEC-001 helpers.
+INIT-001/SPEC-002, INIT-003/SPEC-002.
 """
 
 from __future__ import annotations
@@ -15,9 +16,18 @@ import tempfile
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 import appstate
+from appconfig import _load_config
+from drum_profiles import (
+    PROFILE_ID_RE,
+    list_profiles,
+    load_profile,
+    profile_path,
+    save_profile,
+    validate_profile,
+)
 from drums import PIECES, PRESETS, SHIPPED_KITS_DIR, load_kit_file, load_kits, midi_to_piece
 from safepath import safe_join
 
@@ -33,6 +43,13 @@ _kit_lock = threading.Lock()
 # INIT-002/SPEC-001: atomic per-note mutation body is just {"piece_id": "..."},
 # so it gets a much smaller cap than a whole-kit document.
 _NOTE_BODY_MAX = 4 * 1024
+
+# INIT-003/SPEC-002: in-process highway scoring-session flag. Learn/note
+# and whole-kit writes 409 while any session is playing or paused. No WS frame.
+_SCORING_LOCKED = frozenset({"playing", "paused"})
+_SCORING_STATES = frozenset({"playing", "paused", "stopped", "idle"})
+_scoring_lock = threading.Lock()
+_scoring_state = "stopped"
 
 
 def _user_kits_dir() -> Path:
@@ -100,6 +117,49 @@ def _require_kit_id(kit_id: str) -> str:
     if not isinstance(kit_id, str) or not _KIT_ID_RE.fullmatch(kit_id):
         raise HTTPException(status_code=400, detail="kit id must match [a-z0-9-]+")
     return kit_id
+
+
+def _require_profile_id(profile_id: str) -> str:
+    if not isinstance(profile_id, str) or not PROFILE_ID_RE.fullmatch(profile_id):
+        raise HTTPException(status_code=400, detail="profile id must match [a-z0-9-]+")
+    return profile_id
+
+
+def scoring_session_blocks_learn() -> bool:
+    with _scoring_lock:
+        return _scoring_state in _SCORING_LOCKED
+
+
+def scoring_session_state() -> str:
+    with _scoring_lock:
+        return _scoring_state
+
+
+def set_scoring_session_state(state: str) -> str:
+    if state not in _SCORING_STATES:
+        raise HTTPException(
+            status_code=400,
+            detail="state must be playing, paused, stopped, or idle",
+        )
+    global _scoring_state
+    with _scoring_lock:
+        _scoring_state = state
+        return _scoring_state
+
+
+def reset_scoring_session_for_tests() -> None:
+    """Test fixture hook — unlock Learn between httpx clients."""
+    global _scoring_state
+    with _scoring_lock:
+        _scoring_state = "stopped"
+
+
+def _reject_if_learn_locked() -> None:
+    if scoring_session_blocks_learn():
+        raise HTTPException(
+            status_code=409,
+            detail="kit notes cannot be changed while a highway session is playing or paused",
+        )
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
@@ -265,6 +325,7 @@ async def put_kit_note(kit_id: str, midi_note: str, request: Request):
     dest = _user_kit_path(kit_id)
     if dest is None:
         raise HTTPException(status_code=400, detail="kit id rejected by path containment")
+    _reject_if_learn_locked()
     body = await request.body()
     piece_id = _require_piece_id_body(body)
     parsed = _mutate_kit_note(kit_id, dest, note, piece_id)
@@ -286,6 +347,7 @@ def delete_kit_note(kit_id: str, midi_note: str):
     dest = _user_kit_path(kit_id)
     if dest is None:
         raise HTTPException(status_code=400, detail="kit id rejected by path containment")
+    _reject_if_learn_locked()
     parsed = _mutate_kit_note(kit_id, dest, note, None)
     gm_fallback = midi_to_piece(note)
     log.info("drums kit note removed: kit=%s note=%s", kit_id, note)
@@ -338,6 +400,7 @@ async def put_kit(kit_id: str, request: Request):
     dest = _user_kit_path(kit_id)
     if dest is None:
         raise HTTPException(status_code=400, detail="kit id rejected by path containment")
+    _reject_if_learn_locked()
     body = await request.body()
     payload, err, status = validate_kit_bytes(body, kit_id)
     if err is not None or payload is None:
@@ -355,6 +418,7 @@ def delete_kit(kit_id: str):
     dest = _user_kit_path(kit_id)
     if dest is None:
         raise HTTPException(status_code=400, detail="kit id rejected by path containment")
+    _reject_if_learn_locked()
     user_file = dest.is_file()
     shipped = kit_id in load_kits(SHIPPED_KITS_DIR, None)
     if user_file:
@@ -368,3 +432,159 @@ def delete_kit(kit_id: str):
     if shipped:
         raise HTTPException(status_code=403, detail="shipped kits cannot be deleted")
     raise HTTPException(status_code=404, detail="unknown kit")
+
+
+# ── Scoring session (INIT-003/SPEC-002 aud-1) ───────────────────────────────
+
+
+@router.put("/api/drums/scoring-session")
+def put_scoring_session(data: dict):
+    """Set the in-process highway play-state flag. playing/paused lock Learn."""
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="request body must be an object")
+    if _has_dangerous_keys(data):
+        raise HTTPException(status_code=400, detail="request body contains reserved keys")
+    state = set_scoring_session_state(data.get("state"))
+    log.info("drums scoring session: %s", state)
+    return {"state": state, "learn_locked": state in _SCORING_LOCKED}
+
+
+@router.get("/api/drums/scoring-session")
+def get_scoring_session():
+    state = scoring_session_state()
+    return {"state": state, "learn_locked": state in _SCORING_LOCKED}
+
+
+# ── Drum profiles (INIT-003/SPEC-002) ───────────────────────────────────────
+
+
+def _profile_public(profile: dict) -> dict:
+    """Wire form — canonical store document; source_id already logical."""
+    out = {
+        "id": profile["id"],
+        "name": profile.get("name") or profile["id"],
+        "kit_id": profile.get("kit_id") or "",
+        "device": profile.get("device") or {"source_id": "", "enabled": False},
+        "input": profile.get("input"),
+        "highway": profile.get("highway"),
+    }
+    device_id = profile.get("device_id")
+    if isinstance(device_id, str) and device_id:
+        out["device_id"] = device_id
+    return out
+
+
+def _active_profile_id() -> str | None:
+    cfg = _load_config(appstate.config_dir / "config.json")
+    if not isinstance(cfg, dict):
+        return None
+    raw = cfg.get("active_drum_profile")
+    if isinstance(raw, str) and PROFILE_ID_RE.fullmatch(raw):
+        return raw
+    return None
+
+
+def _require_known_kit_id(kit_id: str) -> None:
+    if not kit_id:
+        return
+    if kit_id not in _loaded_kits():
+        raise HTTPException(status_code=400, detail="kit_id must reference a loaded kit")
+
+
+def _persist_profile_from_body(body: bytes, profile_id: str | None) -> dict:
+    if len(body) > _KIT_BODY_MAX:
+        raise HTTPException(status_code=413, detail="profile body exceeds 64 KiB")
+    try:
+        obj = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="profile body must be JSON") from None
+    if not isinstance(obj, dict):
+        raise HTTPException(status_code=400, detail="profile body must be an object")
+    if _has_dangerous_keys(obj):
+        raise HTTPException(status_code=400, detail="profile body contains reserved keys")
+    if "notes" in obj:
+        raise HTTPException(status_code=400, detail="notes are not allowed on a profile")
+    canonical, err = validate_profile(
+        obj, profile_id, config_dir=appstate.config_dir,
+    )
+    if canonical is None:
+        raise HTTPException(status_code=400, detail=err or "invalid profile")
+    _require_known_kit_id(canonical.get("kit_id") or "")
+    saved, save_err = save_profile(appstate.config_dir, canonical, canonical["id"])
+    if saved is None:
+        raise HTTPException(status_code=400, detail=save_err or "could not persist profile")
+    return saved
+
+
+def _delete_profile_by_id(profile_id: str) -> dict:
+    profile_id = _require_profile_id(profile_id)
+    dest = profile_path(appstate.config_dir, profile_id)
+    if dest is None:
+        raise HTTPException(status_code=400, detail="profile id rejected by path containment")
+    if _active_profile_id() == profile_id:
+        # Delete-active rule (INIT-003/SPEC-002): refuse. Client must
+        # activate another profile (or unset active_drum_profile) first.
+        raise HTTPException(
+            status_code=400,
+            detail="cannot delete the active drum profile; activate another profile first",
+        )
+    if not dest.is_file():
+        raise HTTPException(status_code=404, detail="unknown profile")
+    try:
+        dest.unlink()
+    except OSError as exc:
+        log.warning("drums: failed to delete profile %s: %s", profile_id, exc)
+        raise HTTPException(status_code=500, detail="could not delete profile") from exc
+    log.info("drums profile deleted: %s", profile_id)
+    return {"ok": True}
+
+
+@router.get("/api/drums/profiles")
+def get_profiles():
+    return {
+        "profiles": [
+            _profile_public(p) for p in list_profiles(appstate.config_dir)
+        ]
+    }
+
+
+@router.put("/api/drums/profiles")
+async def put_profiles_collection(request: Request):
+    """Upsert one profile; id comes from the body (kit-collection PUT)."""
+    body = await request.body()
+    saved = _persist_profile_from_body(body, None)
+    log.info("drums profile saved: %s", saved["id"])
+    return _profile_public(saved)
+
+
+@router.delete("/api/drums/profiles")
+def delete_profiles_collection(profile_id: str | None = Query(None, alias="id")):
+    if not profile_id:
+        raise HTTPException(status_code=400, detail="id query parameter is required")
+    return _delete_profile_by_id(profile_id)
+
+
+@router.get("/api/drums/profiles/{profile_id:path}")
+def get_profile(profile_id: str):
+    profile_id = _require_profile_id(profile_id)
+    parsed = load_profile(appstate.config_dir, profile_id)
+    if parsed is None:
+        raise HTTPException(status_code=404, detail="unknown profile")
+    return _profile_public(parsed)
+
+
+@router.put("/api/drums/profiles/{profile_id:path}")
+async def put_profile(profile_id: str, request: Request):
+    profile_id = _require_profile_id(profile_id)
+    dest = profile_path(appstate.config_dir, profile_id)
+    if dest is None:
+        raise HTTPException(status_code=400, detail="profile id rejected by path containment")
+    body = await request.body()
+    saved = _persist_profile_from_body(body, profile_id)
+    log.info("drums profile saved: %s", saved["id"])
+    return _profile_public(saved)
+
+
+@router.delete("/api/drums/profiles/{profile_id:path}")
+def delete_profile(profile_id: str):
+    return _delete_profile_by_id(profile_id)

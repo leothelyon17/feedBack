@@ -7,7 +7,142 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Settings → Drums is Profiles first.** The 2D plugin panel is titled
+  Profiles (create / rename / attach device / lane map / Make active).
+  Lane order is the attached MIDI device's trigger pool, stored on
+  `profile.highway.3d.lanes`. Phase Shift / Rock Band stay under a 2D
+  Drum Highway disclosure. 3D Drum Highway keeps chart fallbacks and kit
+  import only; bloom/camera/theme stay on Graphics.
+- **Drum profile save keeps `device_id`.** Attaching a MIDI device on
+  Profiles was flashing then reverting to None because the in-page
+  accessor dropped `device_id` from the PUT body.
+- **Note map is instance `triggers`.** Settings → MIDI rows come from the
+  saved device (type pick copies a template; Generic starts empty). Add,
+  rename, or delete triggers on that device; MIDI numbers stay Learn-only.
+- **MIDI device instance triggers.** Each saved device copies its type's
+  trigger list (shipped Generic is empty), then the user can add, rename, or
+  delete rows on that instance. Learn validates `piece_id` against the device
+  list; notes no longer require `drums.PIECES`.
+- **Settings → MIDI Device List.** The saved-device picker is labeled
+  Device List. **Create New** is the last option; it reveals a name field
+  (unique display name required) instead of cloning the selected type's
+  name.
+
+### Fixed
+- **MIDI Learn ignored kit hits when the saved device had no source.** Settings →
+  MIDI Learn opened `midiInput` only from `device.source_id`. Overlay-migrated
+  devices (and any document created without a bound port) keep `source_id: ""`,
+  so Learn stayed on “Listening…” and never attached a listener. The detected-
+  source picker now persists the logical id onto the selected device (notes
+  stay), Learn discovers and opens every detected port, and a note-on completes
+  the map. A missing source is reported in the live region instead of a silent
+  listen. Web-MIDI ports are armed on Detect (not only on Learn) using
+  one `MIDIAccess`: `onmidimessage` plus a non-blocking `MIDIPort.open()`,
+  and Settings → MIDI shows the last pad message so a USB kit can be
+  verified without starting Learn. Re-running Detect does not call
+  `requestMIDIAccess()` again.
+
 ### Added
+- **3D consumes MIDI device map (INIT-003/SPEC-013).** Bundled
+  `drum_highway_3d` scores from the attached MIDI device's `notes` via
+  `feedBack.midiDevices.get(profile.device_id)` on
+  `feedback:drum-profile-change` and `feedback:midi-device-change`. Empty
+  `notes: {}` stays unmapped — no Alesis Strata Prime shipped kit and no
+  GM fallback. MIDI device picker, channel knobs, and the mapping table
+  are gone from the 3D Drums settings fragment; bloom/camera/theme stay
+  on Graphics. `drum_h3d_kit_v1` remains visual-only lanes.
+- **MIDI devices panel and accessor (INIT-003/SPEC-011).** Settings → MIDI
+  is a working core panel: pick a detected `midiInput` source by label
+  (persist `source_id` as the logical key), choose a device type from
+  `GET /api/midi/device-types`, map catalog triggers (unmapped rows stay
+  visible with a blank MIDI number), and persist channel / hit detection /
+  synth volume on the active device `input`. `window.feedBack.midiDevices`
+  is the only in-page writer against `/api/midi/devices`. Activate POSTs
+  `active_midi_device` and emits one `feedback:midi-device-change` with
+  `{device_id}` only. Learn PUTs device notes; a 409 is shown in a live
+  region and is not retried. Display labels and shipped kit notes are
+  never persisted. Drum profile PUTs are unchanged (still no `notes`).
+- **MIDI Settings tab host stub (INIT-003/SPEC-010).** Settings gains an
+  always-visible MIDI tab after Drums with mount `#plugin-settings-midi`.
+  The tab is core chrome (like Gameplay), not plugin-gated. A future keys
+  plugin may inject extras into the midi mount. Device picker, type, map,
+  and knobs are a later change. No generic tab-registration API.
+- **MIDI devices HTTP API and Learn lock (INIT-003/SPEC-009).**
+  `GET /api/midi/device-types` lists catalogs with no default `notes` map.
+  `GET`/`PUT`/`DELETE /api/midi/devices` and `/api/midi/devices/{id}` persist
+  device documents; create-from-type (`POST` or `PUT` without `notes`) yields
+  `notes: {}` even when the matching shipped kit has notes. Atomic
+  `PUT`/`DELETE /api/midi/devices/{id}/notes/{midi}` writes one mapping
+  (`piece_id` must be a catalog trigger; MIDI 0–127). Device note mutations
+  and whole-device `PUT`/`DELETE` return 409 while a highway scoring session
+  is playing or paused (reuses SPEC-002 `scoring_session_blocks_learn`).
+  Deleting the active device is 400 until another is activated. Additive
+  `active_midi_device` on `/api/settings`; activating a drum profile that
+  has `device_id` dual-writes that pointer. Settings export/import splits
+  `midi/devices` vs kits vs profiles vs `midi/device-types`; export emits
+  logical `source_id` only. Overlay-kit migrate runs on `GET /api/midi/devices`.
+  Kit note routes remain.
+- **MIDI device documents (INIT-003/SPEC-008).** Instance records persist at
+  `{config_dir}/midi/devices/{id}.json` (`id`, `name`, `source_id`,
+  `device_type_id`, `family`, `notes`, `input`). `notes` defaults to `{}`
+  and is never seeded from GM or a shipped kit. `device_from_type` always
+  writes empty notes even when `alesis-strata-prime` kit notes exist.
+  Profiles may attach via optional `device_id` (existing device only);
+  profile `notes` stay forbidden. One-time overlay-kit migrate copies user
+  `{config_dir}/drums/*.json` notes into a single device and writes
+  `{config_dir}/midi/overlay-kit-notes-migrated`; shipped kit notes are
+  not copied. Kit glob refuses planted device JSON.
+- **MIDI device-type catalogs (INIT-003/SPEC-007).** Shipped
+  `data/midi/device-types/alesis-strata-prime.json` lists Prime pads/zones
+  (`family: drums`) with no `notes` map and no default MIDI integers.
+  `lib/midi_device_types.py` loads shipped + `{config_dir}/midi/device-types/`
+  overlay (same id replaces triggers). Catalog JSON planted in the kit glob
+  is refused as a kit. Empty trigger lists are valid.
+- **3D Drums settings category (INIT-003/SPEC-006).** Bundled `drum_highway_3d`
+  declares `settings.category: "drums"` so a 3D-only install shows the Drums
+  tab. Mapping, kit confirm, MIDI input, and the named profile switcher mount
+  under Settings → Drums. Bloom, camera, theme, and cinematic extras stay on
+  Settings → Graphics via `assets/settings-graphics.html` (existing plugin
+  assets route — no new Python settings schema). Play-critical fields go
+  through `feedBack.drumProfiles`; `drum_h3d_kit_v1` remains a dual-read for
+  visual lane layout only. Subscribing to `feedback:drum-profile-change`
+  refetches `active_kit.notes`.
+- **Drum profile accessor (INIT-003/SPEC-004).** `window.feedBack.drumProfiles`
+  (`static/capabilities/drum-profiles.js`) is the only in-page writer against
+  `/api/drums/profiles`. `list` / `get` / `save` / `activate` consume the
+  SPEC-002 HTTP surface; activate POSTs `active_drum_profile` and dispatches
+  `feedback:drum-profile-change` (`profile_id`, `kit_id`) on the existing
+  feedBack bus. `save` rejects a `notes` field and never PUTs one.
+  `feedBack.drumInput` persists play-critical `input` / `device` fields
+  through the active profile once one exists; legacy `feedback_drums_input_v1`
+  and 2D/3D keys stay dual-read until then. Device `source_id` must be a
+  logical midi-input id.
+- **Drums Settings tab host stub (INIT-003/SPEC-003).** Settings gains a
+  Drums tab after System with mount `#plugin-settings-drums`. The tab is
+  hidden unless an installed plugin declared `settings.category: "drums"`.
+  Plugin settings HTML for that category injects into the drums mount, not
+  the Plugins fallback. No generic tab-registration API.
+- **Drum profile HTTP CRUD and Learn lock (INIT-003/SPEC-002).**
+  `GET`/`PUT`/`DELETE /api/drums/profiles` and `GET`/`PUT
+  /api/drums/profiles/{id}` persist via the SPEC-001 helpers. `kit_id`
+  must name a loaded kit. Profile bodies that include `notes` are
+  rejected. Additive `active_drum_profile` on `/api/settings` dual-writes
+  `active_kit` to that profile's `kit_id`. Deleting the active profile
+  returns 400 until another profile is activated (or the pointer is
+  cleared). `PUT`/`DELETE` kit-note Learn routes return 409 while any
+  highway scoring session is playing or paused (`PUT
+  /api/drums/scoring-session`). Whole-kit `PUT`/`DELETE
+  /api/drums/kits/{kit_id}` also return 409 in those states
+  (INIT-003/SPEC-002 SEC-M-03). Settings import never treats
+  `drums/profiles/*.json` as kits; export omits profiles whose
+  `device.source_id` is not a logical midi-input id.
+- **Named drum profile documents (INIT-003/SPEC-001).** Session documents
+  (`id`, `name`, `kit_id`, `device`, `input`, `highway`) persist under
+  `{config_dir}/drums/profiles/` so the kit glob cannot ingest them. Helpers
+  seed one default from `active_kit` plus legacy stores, dual-write
+  `active_kit = profile.kit_id` on activate, and refuse `notes` / `owner_id`.
+  Existing settings without `active_drum_profile` keep loading.
 - **Auto mode prefers the 3D drum highway (#127, INIT-002/SPEC-005).** For a
   drum arrangement, Auto selects `drum_highway_3d` when the plugin is
   registered and WebGL2 is available, falls back to the 2D drum highway

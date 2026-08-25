@@ -443,15 +443,16 @@ test('REQ-008: GM defaults cannot invoke DELETE', async () => {
     assert.equal(calls.some((c) => c.method === 'DELETE'), false);
 });
 
-test('REQ-008: settings markup has labeled keyboard-operable remove controls', () => {
+test('REQ-008: settings markup has no mapping table; 3D fallbacks remain', () => {
     const html = fs.readFileSync(SETTINGS, 'utf8');
-    assert.match(html, /setAttribute\('aria-label', 'Remove MIDI note '/);
-    assert.match(html, /role="status"/);
-    assert.match(html, /aria-live="polite"/);
-    assert.match(html, /id="drumh3d-use-kit"/);
-    assert.match(html, />Use this kit</);
-    assert.match(html, /MIDI kit mapping/);
-    assert.match(html, /3D lane layout/);
+    assert.doesNotMatch(html, /id="drumh3d-use-kit"/);
+    assert.doesNotMatch(html, /MIDI kit mapping/);
+    assert.doesNotMatch(html, /id="drumh3d-map-rows"/);
+    assert.doesNotMatch(html, /id="drumh3d-midi-input"/);
+    assert.doesNotMatch(html, /id="drumh3d-midi-channel"/);
+    assert.doesNotMatch(html, /id="drumh3d-kit-name"/);
+    assert.doesNotMatch(html, /id="drumh3d-kit-lanes"/);
+    assert.match(html, /Chart fallbacks/);
     assert.match(html, /type="button"/);
 });
 
@@ -508,9 +509,10 @@ test('REQ-009: repeated ensure/release returns listener count to baseline', () =
     assert.equal(ctx.drumInput._subs.length, 0);
 });
 
-test('REQ-008: keyboard remove is a real button with note-and-piece label', () => {
+test('REQ-008: mapping Learn/remove controls are gone from 3D settings.html', () => {
     const html = fs.readFileSync(SETTINGS, 'utf8');
-    assert.match(html, /rm\.type = 'button'/);
-    assert.match(html, /Remove MIDI note ' \+ note \+ ' from '/);
-    assert.match(html, /learn\.type = 'button'/);
+    assert.doesNotMatch(html, /rm\.type = 'button'/);
+    assert.doesNotMatch(html, /Remove MIDI note '/);
+    assert.doesNotMatch(html, /learn\.type = 'button'/);
+    assert.doesNotMatch(html, />Learn</);
 });

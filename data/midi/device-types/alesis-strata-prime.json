@@ -1,0 +1,31 @@
+{
+  "id": "alesis-strata-prime",
+  "name": "Alesis Strata Prime",
+  "manufacturer": "Alesis",
+  "family": "drums",
+  "triggers": [
+    {"id": "kick", "name": "Kick"},
+    {"id": "snare", "name": "Snare", "zone": "head"},
+    {"id": "snare_rim", "name": "Snare Rim", "zone": "rim"},
+    {"id": "snare_xstick", "name": "Snare Cross-Stick"},
+    {"id": "tom_hi", "name": "Tom 1"},
+    {"id": "tom_mid", "name": "Tom 2"},
+    {"id": "tom_low", "name": "Tom 3"},
+    {"id": "tom_floor", "name": "Tom 4"},
+    {"id": "hh_open", "name": "Hi-Hat Open", "zone": "head"},
+    {"id": "hh_closed", "name": "Hi-Hat Closed", "zone": "head"},
+    {"id": "hh_edge", "name": "Hi-Hat Edge", "zone": "edge"},
+    {"id": "hh_pedal", "name": "Hi-Hat Pedal"},
+    {"id": "crash_l", "name": "Crash 1", "zone": "head"},
+    {"id": "crash_l_edge", "name": "Crash 1 Edge", "zone": "edge"},
+    {"id": "crash_l_choke", "name": "Crash 1 Choke", "zone": "choke"},
+    {"id": "crash_r", "name": "Crash 2", "zone": "head"},
+    {"id": "crash_r_edge", "name": "Crash 2 Edge", "zone": "edge"},
+    {"id": "crash_r_choke", "name": "Crash 2 Choke", "zone": "choke"},
+    {"id": "ride", "name": "Ride", "zone": "head"},
+    {"id": "ride_bell", "name": "Ride Bell", "zone": "bell"},
+    {"id": "ride_edge", "name": "Ride Edge", "zone": "edge"},
+    {"id": "splash", "name": "Splash"},
+    {"id": "china", "name": "China"}
+  ]
+}

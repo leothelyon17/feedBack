@@ -381,16 +381,12 @@ test('REQ-009: repeated ensure/release returns one listener and no leftover MIDI
     assert.equal(ctx.drumInput._subs.length, 0);
 });
 
-test('REQ-005: settings markup adds labeled channel and hit-detection controls', () => {
+test('REQ-005: settings markup has no MIDI channel knobs (MIDI tab owns them)', () => {
     const html = fs.readFileSync(SETTINGS, 'utf8');
-    assert.match(html, /id="drumh3d-midi-channel"/);
-    assert.match(html, /for="drumh3d-midi-channel"/);
-    assert.match(html, />All</);
-    assert.match(html, /10 \(Drums\)/);
-    assert.match(html, /id="drumh3d-hit-detect"/);
-    assert.match(html, /for="drumh3d-hit-detect"/);
-    assert.match(html, /Hit detection/);
-    assert.match(html, /drum_h3d:input/);
-    assert.match(html, /drumH3dSetMidiChannel/);
-    assert.match(html, /drumH3dSetHitDetection/);
+    assert.doesNotMatch(html, /id="drumh3d-midi-channel"/);
+    assert.doesNotMatch(html, /for="drumh3d-midi-channel"/);
+    assert.doesNotMatch(html, /id="drumh3d-midi-input"/);
+    assert.doesNotMatch(html, /id="drumh3d-hit-detect"/);
+    assert.doesNotMatch(html, /id="drumh3d-synth-vol"/);
+    assert.match(html, /Chart fallbacks/);
 });

@@ -383,6 +383,21 @@ def _parse_kit(obj: object) -> dict | None:
     cleaned = _strip_dangerous_keys(obj)
     if not isinstance(cleaned, dict):
         return None
+    # INIT-003/SPEC-001: profile documents live under drums/profiles/.
+    # If one is planted in the kit glob, refuse — never ingest as a kit.
+    if "kit_id" in cleaned:
+        log.warning("kit: refusing profile document planted as kit %r", cleaned.get("id"))
+        return None
+    # INIT-003/SPEC-008: MIDI device documents live under midi/devices/.
+    # A device planted in drums/*.json must not become a kit.
+    if "device_type_id" in cleaned:
+        log.warning("kit: refusing MIDI device document planted as kit %r", cleaned.get("id"))
+        return None
+    # INIT-003/SPEC-007: device-type catalogs live under midi/device-types/.
+    # A catalog planted in drums/*.json must not become a kit (empty notes).
+    if "triggers" in cleaned or cleaned.get("family") in ("drums", "keys", "other"):
+        log.warning("kit: refusing device-type catalog planted as kit %r", cleaned.get("id"))
+        return None
     kit_id = cleaned.get("id")
     if not _kit_id_ok(kit_id):
         log.warning("kit: rejecting record with unsafe or missing id %r", kit_id)

@@ -179,7 +179,7 @@ function loadWithWebMidi(inputs) {
     window.navigator = {
         requestMIDIAccess: async () => ({
             onstatechange: null,
-            inputs: new Map(inputs.map((i) => [i.id, { id: i.id, name: i.name, onmidimessage: null }])),
+            inputs: new Map(inputs.map((i) => [i.id, i])),
         }),
     };
     const context = vm.createContext(window);
@@ -187,6 +187,91 @@ function loadWithWebMidi(inputs) {
     vm.runInContext(fs.readFileSync(MIDI_INPUT_JS, 'utf8'), context, { filename: MIDI_INPUT_JS });
     return window;
 }
+
+test('built-in Web-MIDI open shares one dispatcher (second open does not drop listeners)', async () => {
+    const port = {
+        id: 'kb1',
+        name: 'My Keyboard',
+        onmidimessage: null,
+        opened: 0,
+        async open() { this.opened += 1; },
+    };
+    const window = loadWithWebMidi([port]);
+    await window.feedBack.midiInput.discover();
+    const a = await window.feedBack.midiInput.open({ requester: 'learn', logicalSourceKey: 'web-midi::kb1' });
+    const seen = [];
+    a.handle.addListener((d) => seen.push(Array.from(d)));
+    const b = await window.feedBack.midiInput.open({ requester: 'drums', logicalSourceKey: 'web-midi::kb1' });
+    assert.ok(b.handle);
+    port.onmidimessage({ data: new Uint8Array([0x99, 38, 100]) });
+    assert.deepEqual(seen, [[0x99, 38, 100]]);
+    assert.ok(port.opened >= 1, 'MIDIPort.open() must run so Chrome starts the stream');
+});
+
+test('watchMessages sees hits after discover without a session open', async () => {
+    const port = {
+        id: 'kb1',
+        name: 'Alesis Prime Drum Module MIDI',
+        onmidimessage: null,
+        addEventListener() {},
+        removeEventListener() {},
+        async open() { this.opened = true; },
+    };
+    const window = loadWithWebMidi([port]);
+    const seen = [];
+    window.feedBack.midiInput.watchMessages((m) => seen.push(m));
+    await window.feedBack.midiInput.discover();
+    assert.equal(typeof port.onmidimessage, 'function');
+    port.onmidimessage({ data: new Uint8Array([0x99, 38, 100]) });
+    const hits = seen.filter((m) => m && m.data && m.data[1] === 38);
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].label, 'Alesis Prime Drum Module MIDI');
+});
+
+test('second discover reuses MIDIAccess and keeps onmidimessage', async () => {
+    let calls = 0;
+    const port = {
+        id: 'kb1',
+        name: 'Kit',
+        onmidimessage: null,
+        async open() { this.opened = true; },
+    };
+    const window = createWindow();
+    window.navigator = {
+        requestMIDIAccess: async () => {
+            calls += 1;
+            return { onstatechange: null, inputs: new Map([[port.id, port]]) };
+        },
+    };
+    const context = vm.createContext(window);
+    vm.runInContext(fs.readFileSync(CAPABILITIES_JS, 'utf8'), context, { filename: CAPABILITIES_JS });
+    vm.runInContext(fs.readFileSync(MIDI_INPUT_JS, 'utf8'), context, { filename: MIDI_INPUT_JS });
+    await window.feedBack.midiInput.discover();
+    const handler = port.onmidimessage;
+    await window.feedBack.midiInput.discover();
+    assert.equal(calls, 1, 'requestMIDIAccess must run once');
+    assert.equal(typeof handler, 'function');
+    assert.equal(port.onmidimessage, handler, 'Detect must not replace the live handler');
+});
+
+test('attaches onmidimessage before MIDIPort.open resolves', async () => {
+    let resolveOpen;
+    const port = {
+        id: 'kb1',
+        name: 'Kit',
+        onmidimessage: null,
+        open() { return new Promise((r) => { resolveOpen = r; }); },
+    };
+    const window = loadWithWebMidi([port]);
+    const pending = window.feedBack.midiInput.discover();
+    for (let i = 0; i < 80 && typeof port.onmidimessage !== 'function'; i += 1) {
+        await Promise.resolve();
+    }
+    assert.equal(typeof port.onmidimessage, 'function',
+        'listeners must attach even while open() is pending');
+    resolveOpen();
+    await pending;
+});
 
 test('built-in Web-MIDI provider self-registers + discovers, filtering loopback ports', async () => {
     const window = loadWithWebMidi([

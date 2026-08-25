@@ -43,8 +43,22 @@
     // calling provider.open() (which, for Web-MIDI, would overwrite the shared
     // input.onmidimessage handler and orphan the earlier session/handle).
     const opening = new Map();
+    const messageWatchers = new Set();
     let selectedKey = _readStorage();
     let lastOutcome = null;
+
+    function _copyMidiBytes(raw) {
+        if (raw == null) return null;
+        const src = raw.data != null && !ArrayBuffer.isView(raw) && !Array.isArray(raw) ? raw.data : raw;
+        if (!src || src.length == null || src.length < 1) return null;
+        const out = new Uint8Array(src.length);
+        for (let i = 0; i < src.length; i += 1) out[i] = src[i];
+        return out;
+    }
+
+    function _emitLiveMessage(detail) {
+        messageWatchers.forEach((fn) => { try { fn(detail); } catch (_) { /* watcher isolation */ } });
+    }
 
     // ── outcome helpers (mirror note-detection.js) ──────────────────────────
     function _handled(payload = {}) { lastOutcome = { outcome: 'handled' }; return { outcome: 'handled', payload }; }
@@ -292,9 +306,8 @@
         // session and release our redundant handle so we don't orphan a device.
         const existing = sessions.get(key);
         if (existing) {
-            if (provider.handlers.close) {
-                try { provider.handlers.close(source.sourceId, handle); } catch (_) { /* best-effort */ }
-            }
+            // Do not provider.close() the extra handle: Web-MIDI close used to
+            // null MIDIInput.onmidimessage and drop the winner's listeners.
             existing.refs.add(requester);
             return _handled(_snapshot({ sessionId: existing.sessionId, shared: true }));
         }
@@ -379,6 +392,13 @@
             return { ...result, handle: session ? session.handle : null, sessionId: session ? session.sessionId : null };
         },
         close: (opts = {}) => _closeSource({ source: opts.requester || 'in-page', payload: opts }),
+        // Live pad-check: every armed Web-MIDI input fans out here. Discover
+        // (Detect) starts the stream; callers do not need an open() session.
+        watchMessages(fn) {
+            if (typeof fn !== 'function') return function () {};
+            messageWatchers.add(fn);
+            return function () { messageWatchers.delete(fn); };
+        },
     };
 
     // ── built-in Web-MIDI provider ──────────────────────────────────────────
@@ -390,6 +410,77 @@
         if (typeof navigator === 'undefined' || typeof navigator.requestMIDIAccess !== 'function') return;
         const BLOCK = /(midi through|thru|iac)/i;   // loopback / passthrough ports
         let access = null;
+        // One dispatcher per Web-MIDI input.id. A second provider.open() on the
+        // same port must not replace MIDIInput.onmidimessage (that orphans the
+        // first handle's listener set — Settings Learn then never sees hits).
+        const dispatchers = new Map();
+        function _eachInput(acc, visit) {
+            if (!acc || !acc.inputs || typeof visit !== 'function') return;
+            if (typeof acc.inputs.forEach === 'function') {
+                try { acc.inputs.forEach((input) => { if (input) visit(input); }); return; }
+                catch (_) { /* fall through */ }
+            }
+            try {
+                if (typeof acc.inputs.values === 'function') {
+                    for (const input of acc.inputs.values()) if (input) visit(input);
+                }
+            } catch (_) { /* best-effort */ }
+        }
+        function _openPort(input) {
+            if (!input || typeof input.open !== 'function') return;
+            try {
+                const opened = input.open();
+                if (opened && typeof opened.catch === 'function') opened.catch(function () { /* already open */ });
+            } catch (_) { /* some browsers open via onmidimessage */ }
+        }
+        function _armInput(input) {
+            if (!input || !input.id) return null;
+            const sourceId = input.id;
+            const live = _findMidiInput(access, sourceId) || input;
+            let slot = dispatchers.get(sourceId);
+            if (!slot) {
+                slot = { listeners: new Set(), input: live };
+                dispatchers.set(sourceId, slot);
+            }
+            slot.input = live;
+            if (slot._onMidi && slot._armedRef === live) {
+                if (live.connection !== 'open') _openPort(live);
+                return slot;
+            }
+            const label = live.name || 'MIDI input';
+            const onMidi = function (e) {
+                const data = _copyMidiBytes(e);
+                if (!data) return;
+                slot.listeners.forEach((fn) => { try { fn(data); } catch (_) { /* listener isolation */ } });
+                _emitLiveMessage({
+                    sourceId: sourceId,
+                    logicalSourceKey: 'web-midi::' + sourceId,
+                    label: label,
+                    data: data,
+                });
+            };
+            slot._onMidi = onMidi;
+            slot._armedRef = live;
+            try { live.onmidimessage = onMidi; } catch (_) { /* best-effort */ }
+            _openPort(live);
+            return slot;
+        }
+        function _findMidiInput(acc, sourceId) {
+            if (!acc || !acc.inputs) return null;
+            if (typeof acc.inputs.get === 'function') {
+                try {
+                    const found = acc.inputs.get(sourceId);
+                    if (found) return found;
+                } catch (_) { /* MIDIInputMap.get is not always implemented */ }
+            }
+            let match = null;
+            try {
+                acc.inputs.forEach((input) => {
+                    if (!match && input && input.id === sourceId) match = input;
+                });
+            } catch (_) { /* best-effort */ }
+            return match;
+        }
         _registerProvider({
             providerId: 'web-midi',
             label: 'Web MIDI',
@@ -399,29 +490,38 @@
             // a provider swap/hot-reload, leaving midi-input with no owner.
             participantId: 'core.midi-input.web-midi',
             enumerate: async () => {
-                access = await navigator.requestMIDIAccess({ sysex: false });
-                try { access.onstatechange = () => { _discover(); }; } catch (_) { /* best-effort */ }
-                const out = [];
-                access.inputs.forEach((input) => {
+                if (!access) {
+                    access = await navigator.requestMIDIAccess({ sysex: false });
+                    try { access.onstatechange = () => { _discover(); }; } catch (_) { /* best-effort */ }
+                }
+                const found = [];
+                _eachInput(access, (input) => {
                     if (BLOCK.test(input.name || '')) return;
-                    out.push({ sourceId: input.id, label: input.name || 'MIDI input', availability: 'available' });
+                    found.push(input);
+                    _armInput(input);
                 });
-                return out;
+                return found.map((input) => ({
+                    sourceId: input.id,
+                    label: input.name || 'MIDI input',
+                    availability: 'available',
+                }));
             },
             open: async (sourceId) => {
                 if (!access) access = await navigator.requestMIDIAccess({ sysex: false });
-                const input = access.inputs.get(sourceId);
+                const input = _findMidiInput(access, sourceId);
                 if (!input) throw new Error('MIDI input not found');
-                const listeners = new Set();
-                input.onmidimessage = (e) => { listeners.forEach((fn) => { try { fn(e.data); } catch (_) { /* listener isolation */ } }); };
+                const slot = _armInput(input);
+                if (!slot) throw new Error('MIDI input not found');
                 return {
-                    addListener: (fn) => { if (typeof fn === 'function') listeners.add(fn); },
-                    removeListener: (fn) => listeners.delete(fn),
-                    _input: input,
+                    addListener: (fn) => { if (typeof fn === 'function') slot.listeners.add(fn); },
+                    removeListener: (fn) => slot.listeners.delete(fn),
+                    _input: slot.input,
+                    _sourceId: sourceId,
                 };
             },
-            close: (sourceId, handle) => {
-                if (handle && handle._input) { try { handle._input.onmidimessage = null; } catch (_) { /* best-effort */ } }
+            close: () => {
+                // Session release only. Enumerate-time arm stays so Settings
+                // Learn and the live hit probe keep receiving pad hits.
             },
         });
     })();

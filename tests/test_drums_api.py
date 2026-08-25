@@ -24,6 +24,8 @@ def env(tmp_path, monkeypatch, isolate_logging):
     monkeypatch.setenv("FEEDBACK_SKIP_STARTUP_TASKS", "1")
     sys.modules.pop("server", None)
     srv = importlib.import_module("server")
+    from routers import drums as drums_router
+    drums_router.reset_scoring_session_for_tests()
     try:
         yield srv, tmp_path
     finally:
@@ -557,3 +559,103 @@ def test_concurrent_note_mutations_do_not_lose_each_other(client, env):
     assert final["notes"]["61"] == "crash_l"
     # The note set before the concurrent pair also survived.
     assert final["notes"]["24"] == "kick"
+
+
+# ── Learn lock (INIT-003/SPEC-002 ac-4 / aud-1 / aud-2) ──────────────────────
+
+
+def test_put_note_conflicts_while_scoring_session_playing(client, env):
+    _srv, tmp = env
+    seed = client.put(
+        "/api/drums/kits/alesis-strata-prime/notes/24", json={"piece_id": "kick"}
+    )
+    assert seed.status_code == 200, seed.text
+    before = json.loads((tmp / "drums" / "alesis-strata-prime.json").read_text())
+
+    lock = client.put("/api/drums/scoring-session", json={"state": "playing"})
+    assert lock.status_code == 200, lock.text
+    assert lock.json()["learn_locked"] is True
+
+    r = client.put(
+        "/api/drums/kits/alesis-strata-prime/notes/60", json={"piece_id": "ride"}
+    )
+    assert r.status_code == 409
+    after = json.loads((tmp / "drums" / "alesis-strata-prime.json").read_text())
+    assert after == before
+    got = client.get("/api/drums/kits/alesis-strata-prime")
+    assert got.status_code == 200
+    assert "60" not in got.json()["notes"]
+
+
+def test_delete_note_conflicts_while_scoring_session_paused(client, env):
+    _srv, tmp = env
+    seed = client.put(
+        "/api/drums/kits/alesis-strata-prime/notes/38", json={"piece_id": "tom_hi"}
+    )
+    assert seed.status_code == 200, seed.text
+    before = json.loads((tmp / "drums" / "alesis-strata-prime.json").read_text())
+
+    lock = client.put("/api/drums/scoring-session", json={"state": "paused"})
+    assert lock.status_code == 200
+    assert lock.json()["learn_locked"] is True
+
+    r = client.delete("/api/drums/kits/alesis-strata-prime/notes/38")
+    assert r.status_code == 409
+    after = json.loads((tmp / "drums" / "alesis-strata-prime.json").read_text())
+    assert after == before
+    got = client.get("/api/drums/kits/alesis-strata-prime")
+    assert got.json()["notes"]["38"] == "tom_hi"
+
+
+def test_note_mutations_succeed_after_scoring_session_stopped(client, env):
+    client.put("/api/drums/scoring-session", json={"state": "playing"})
+    client.put("/api/drums/scoring-session", json={"state": "stopped"})
+    r = client.put(
+        "/api/drums/kits/alesis-strata-prime/notes/24", json={"piece_id": "kick"}
+    )
+    assert r.status_code == 200, r.text
+    d = client.delete("/api/drums/kits/alesis-strata-prime/notes/24")
+    assert d.status_code == 200, d.text
+
+
+def test_put_kit_conflicts_while_scoring_session_playing(client, env):
+    """SEC-M-03: whole-kit PUT cannot replace notes while playing."""
+    _srv, tmp = env
+    seed = client.put("/api/drums/kits/my-ekit", json=_user_kit_body())
+    assert seed.status_code == 200, seed.text
+    before = json.loads((tmp / "drums" / "my-ekit.json").read_text())
+
+    lock = client.put("/api/drums/scoring-session", json={"state": "playing"})
+    assert lock.status_code == 200, lock.text
+    assert lock.json()["learn_locked"] is True
+
+    replacement = _user_kit_body()
+    replacement["notes"] = {"60": "ride"}
+    r = client.put("/api/drums/kits/my-ekit", json=replacement)
+    assert r.status_code == 409
+    after = json.loads((tmp / "drums" / "my-ekit.json").read_text())
+    assert after == before
+    got = client.get("/api/drums/kits/my-ekit")
+    assert got.status_code == 200
+    assert got.json()["notes"]["38"] == "snare"
+    assert "60" not in got.json()["notes"]
+
+
+def test_delete_kit_conflicts_while_scoring_session_paused(client, env):
+    """SEC-M-03: whole-kit DELETE cannot remove notes while paused."""
+    _srv, tmp = env
+    seed = client.put("/api/drums/kits/my-ekit", json=_user_kit_body())
+    assert seed.status_code == 200, seed.text
+    before = json.loads((tmp / "drums" / "my-ekit.json").read_text())
+
+    lock = client.put("/api/drums/scoring-session", json={"state": "paused"})
+    assert lock.status_code == 200
+    assert lock.json()["learn_locked"] is True
+
+    r = client.delete("/api/drums/kits/my-ekit")
+    assert r.status_code == 409
+    after = json.loads((tmp / "drums" / "my-ekit.json").read_text())
+    assert after == before
+    got = client.get("/api/drums/kits/my-ekit")
+    assert got.status_code == 200
+    assert got.json()["notes"]["38"] == "snare"

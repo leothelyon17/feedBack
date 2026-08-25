@@ -173,7 +173,7 @@ test('ac-4: unset active_kit keeps drum_h3d_kit_v1 lanes/fallbacks', async () =>
     assert.equal(after.fallbacks.ride_bell, 'snare');
 });
 
-test('ac-2: active_kit notes overlay wins over vocabulary GM', async () => {
+test('ac-2: consume does not apply alesis-strata-prime shipped kit notes as overlay', async () => {
     const vocab = dumpCoreVocabulary();
     const { __test } = load();
     const seen = [];
@@ -191,10 +191,10 @@ test('ac-2: active_kit notes overlay wins over vocabulary GM', async () => {
         return jsonFail();
     });
     assert.equal(result.vocabulary, true);
-    assert.equal(result.activeKit, true);
-    assert.equal(__test._midiToPiece(38), 'tom_hi');
-    assert.equal(__test._midiToPiece(24), 'kick');
-    assert.equal(__test._midiToPiece(36), 'kick');
+    assert.equal(result.activeKit, false);
+    assert.equal(seen.some((u) => String(u).startsWith('/api/drums/kits/')), false);
+    // Vocabulary GM still maps until a device document is consumed.
+    assert.equal(__test._midiToPiece(38), 'snare');
     assert.ok(new Set(__test._effectivePieceIds()).has('stack'));
 });
 
