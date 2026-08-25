@@ -44,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **MIDI device `timing` field (INIT-004/SPEC-006).** Device JSON may carry
+  an optional Calibration object `{offset_ms, measured_at, n,
+  median_abs_error_ms, origin, audio_backend}`. Omitted key is Not set
+  (not +0). `save_device` preserves on-disk `timing` when a later write
+  omits the key (INIT-003 channel / Learn / trigger PUTs); `timing: null`
+  or `{}` clears. `offset_ms` is clamped to [-250, 250]; `audio_backend`
+  is `html5` or `juce`. Create-from-type and overlay-kit migrate do not
+  seed `timing`. Drum profiles still reject `notes` and do not grow a
+  `timing` field.
 - **Tap-to-beat and MIDI Calibration host (INIT-004/SPEC-001).** Web MIDI
   listeners now receive `{ data, timeStamp }`. `feedBack.tapToBeat` converts
   that stamp onto `highway.getTime()`, finds the nearest metronome click, and
