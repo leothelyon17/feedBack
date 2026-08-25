@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **3D drum highway judges on the MIDI clock (INIT-004/SPEC-005).** Bundled
+  `drum_highway_3d` maps each MIDI `timeStamp` onto `highway.getTime()`,
+  subtracts `feedBack.drumTiming.getOffsetMs()` (0 when that getter is
+  absent), and scores against note time. Gems still draw on visual
+  `currentTime`. A finite drum offset never writes `av_offset_ms` or
+  calls `setAvOffset`. The ±50 ms hit window is unchanged.
 - **MIDI device API round-trips `timing` (INIT-004/SPEC-007).** GET/list
   include the Calibration object when set and omit the key when Not set.
   PUT `/api/midi/devices` and PUT `/api/midi/devices/{id}` persist `timing`
