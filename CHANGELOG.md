@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **MIDI device timing profiles (INIT-006/SPEC-005).** Device `timing`
+  may carry an optional `profiles` list of `{origin, audio_backend,
+  offset_ms}` and an optional `audio_latency_hint_ms`. Old files with
+  only `offset_ms` + tag still load as the active profile. Saving a
+  second topology keeps the first; `offset_ms` remains a cache of the
+  active profile. The hint round-trips separately and is never summed
+  into `offset_ms`.
 - **Named judge plane + insecure-MIDI warning (INIT-006/SPEC-002).**
   `highway.getJudgeTime()` aliases the chart-aligned clock (`getTime()`).
   Guitar A/V (`av_offset_ms` / `setAvOffset`) still moves gem draw time

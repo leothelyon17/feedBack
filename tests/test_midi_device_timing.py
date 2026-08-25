@@ -1,4 +1,4 @@
-"""INIT-004/SPEC-006: optional MIDI device `timing` field."""
+"""INIT-004/SPEC-006 + INIT-006/SPEC-005: MIDI device `timing` field."""
 
 from __future__ import annotations
 
@@ -384,3 +384,287 @@ def test_save_omit_preserves_nothing_when_on_disk_unreadable(tmp_path: Path):
     saved, err = md.save_device(tmp_path, _device())
     assert err is None
     assert "timing" not in saved
+
+
+# ── INIT-006/SPEC-005 ac-1: old offset_ms + tag is the active profile ─────────
+
+def test_old_format_offset_and_tag_loads_as_active_profile(tmp_path: Path):
+    dest = tmp_path / "midi" / "devices"
+    dest.mkdir(parents=True)
+    body = _device(timing={
+        "offset_ms": 12.5,
+        "measured_at": "2026-08-24T12:00:00Z",
+        "n": 24,
+        "median_abs_error_ms": 8.2,
+        "origin": "web-midi",
+        "audio_backend": "html5",
+    })
+    assert "profiles" not in body["timing"]
+    assert "audio_latency_hint_ms" not in body["timing"]
+    (dest / "living-room-ekit.json").write_text(json.dumps(body), encoding="utf-8")
+    loaded = md.load_device(tmp_path, "living-room-ekit")
+    assert loaded is not None
+    timing = loaded["timing"]
+    assert timing["offset_ms"] == 12.5
+    assert timing["origin"] == "web-midi"
+    assert timing["audio_backend"] == "html5"
+    assert "profiles" not in timing
+    active = md.active_timing_profile(timing)
+    assert active == {
+        "origin": "web-midi",
+        "audio_backend": "html5",
+        "offset_ms": 12.5,
+    }
+
+
+def test_empty_profiles_leftover_offset_stays_active():
+    canonical, err = md._normalise_timing(_timing(profiles=[]))
+    assert err is None
+    assert canonical["offset_ms"] == 12.5
+    assert "profiles" not in canonical
+    active = md.active_timing_profile(canonical)
+    assert active["offset_ms"] == 12.5
+    assert active["origin"] == "web-midi"
+
+
+# ── INIT-006/SPEC-005 ac-2: second topology kept; switch selects match ────────
+
+def test_second_topology_keeps_first_switch_selects_match(tmp_path: Path):
+    first, err = md.save_device(
+        tmp_path,
+        _device(timing=_timing(offset_ms=12.5, origin="web-midi", audio_backend="html5")),
+    )
+    assert err is None
+    assert first["timing"]["offset_ms"] == 12.5
+    second, err = md.save_device(
+        tmp_path,
+        _device(timing=_timing(offset_ms=40.0, origin="desktop", audio_backend="juce")),
+    )
+    assert err is None
+    timing = second["timing"]
+    keys = {(p["origin"], p["audio_backend"], p["offset_ms"]) for p in timing["profiles"]}
+    assert ("web-midi", "html5", 12.5) in keys
+    assert ("desktop", "juce", 40.0) in keys
+    assert timing["offset_ms"] == 40.0
+    assert timing["origin"] == "desktop"
+    assert timing["audio_backend"] == "juce"
+    switched = md.select_timing_profile(timing, "web-midi", "html5")
+    assert switched is not None
+    assert switched["offset_ms"] == 12.5
+    assert switched["origin"] == "web-midi"
+    assert switched["audio_backend"] == "html5"
+    switched_keys = {
+        (p["origin"], p["audio_backend"], p["offset_ms"]) for p in switched["profiles"]
+    }
+    assert switched_keys == keys
+    still_desktop = md.active_timing_profile(switched, "desktop", "juce")
+    assert still_desktop is not None
+    assert still_desktop["offset_ms"] == 40.0
+
+
+def test_upsert_timing_profile_keeps_first_in_memory():
+    first, err = md._normalise_timing(_timing(offset_ms=12.5))
+    assert err is None
+    updated, err = md.upsert_timing_profile(
+        first, origin="desktop", audio_backend="juce", offset_ms=18.0,
+    )
+    assert err is None
+    keys = {(p["origin"], p["audio_backend"]) for p in updated["profiles"]}
+    assert keys == {("web-midi", "html5"), ("desktop", "juce")}
+    assert updated["offset_ms"] == 18.0
+    web = md.active_timing_profile(updated, "web-midi", "html5")
+    assert web["offset_ms"] == 12.5
+    assert md.active_timing_profile(updated, "nas", "html5") is None
+
+
+def test_unknown_profile_backend_skipped_leftover_kept():
+    raw = _timing(offset_ms=12.5)
+    raw["profiles"] = [
+        {"origin": "nas", "audio_backend": "wasapi", "offset_ms": 99},
+        {"origin": "web-midi", "audio_backend": "html5", "offset_ms": 12.5},
+    ]
+    canonical, err = md._normalise_timing(raw)
+    assert err is None
+    origins = {p["origin"] for p in canonical["profiles"]}
+    assert "nas" not in origins
+    assert "web-midi" in origins
+    assert canonical["offset_ms"] == 12.5
+
+
+# ── INIT-006/SPEC-005 ac-3: hint omitted vs finite; never summed ──────────────
+
+def test_audio_latency_hint_omitted_means_no_hint():
+    canonical, err = md._normalise_timing(_timing())
+    assert err is None
+    assert "audio_latency_hint_ms" not in canonical
+
+
+def test_audio_latency_hint_finite_round_trip_not_summed(tmp_path: Path):
+    offset = 12.5
+    hint = 40.0
+    saved, err = md.save_device(
+        tmp_path,
+        _device(timing=_timing(offset_ms=offset, audio_latency_hint_ms=hint)),
+    )
+    assert err is None
+    timing = saved["timing"]
+    assert timing["audio_latency_hint_ms"] == hint
+    assert timing["offset_ms"] == offset
+    assert timing["offset_ms"] != offset + hint
+    on_disk = json.loads(
+        (tmp_path / "midi" / "devices" / "living-room-ekit.json").read_text(encoding="utf-8")
+    )
+    assert on_disk["timing"]["audio_latency_hint_ms"] == hint
+    assert on_disk["timing"]["offset_ms"] == offset
+    reloaded = md.load_device(tmp_path, "living-room-ekit")
+    assert reloaded["timing"]["audio_latency_hint_ms"] == hint
+    assert reloaded["timing"]["offset_ms"] == offset
+
+
+def test_audio_latency_hint_omitted_on_disk_fixture(tmp_path: Path):
+    dest = tmp_path / "midi" / "devices"
+    dest.mkdir(parents=True)
+    body = _device(timing=_timing())
+    (dest / "living-room-ekit.json").write_text(json.dumps(body), encoding="utf-8")
+    loaded = md.load_device(tmp_path, "living-room-ekit")
+    assert "audio_latency_hint_ms" not in loaded["timing"]
+
+
+def test_normalise_timing_rejects_non_finite_hint():
+    canonical, err = md._normalise_timing(_timing(audio_latency_hint_ms=float("nan")))
+    assert canonical is None
+    assert err is not None and "audio_latency_hint_ms" in err
+
+
+def test_upsert_does_not_fold_hint_into_offset():
+    seeded, err = md._normalise_timing(_timing(offset_ms=10.0, audio_latency_hint_ms=25.0))
+    assert err is None
+    updated, err = md.upsert_timing_profile(
+        seeded, origin="desktop", audio_backend="juce", offset_ms=10.0,
+    )
+    assert err is None
+    assert updated["offset_ms"] == 10.0
+    assert updated["audio_latency_hint_ms"] == 25.0
+    assert updated["offset_ms"] != 10.0 + 25.0
+
+
+def test_profiles_must_be_a_list():
+    canonical, err = md._normalise_timing(_timing(profiles={"web-midi": 12.5}))
+    assert canonical is None
+    assert err is not None and "profiles" in err
+
+
+def test_non_object_profile_row_skipped():
+    raw = _timing()
+    raw["profiles"] = ["nope", {"origin": "web-midi", "audio_backend": "html5", "offset_ms": 12.5}]
+    canonical, err = md._normalise_timing(raw)
+    assert err is None
+    assert canonical["profiles"] == [
+        {"origin": "web-midi", "audio_backend": "html5", "offset_ms": 12.5},
+    ]
+
+
+def test_offset_derived_from_matching_profile_when_cache_omitted():
+    canonical, err = md._normalise_timing({
+        "origin": "desktop",
+        "audio_backend": "juce",
+        "profiles": [
+            {"origin": "web-midi", "audio_backend": "html5", "offset_ms": 12.5},
+            {"origin": "desktop", "audio_backend": "juce", "offset_ms": 40},
+        ],
+    })
+    assert err is None
+    assert canonical["offset_ms"] == 40.0
+    assert canonical["origin"] == "desktop"
+    assert canonical["audio_backend"] == "juce"
+
+
+def test_offset_derived_from_first_profile_when_tag_omitted():
+    canonical, err = md._normalise_timing({
+        "profiles": [
+            {"origin": "web-midi", "audio_backend": "html5", "offset_ms": 12.5},
+        ],
+    })
+    assert err is None
+    assert canonical["offset_ms"] == 12.5
+    assert canonical["origin"] == "web-midi"
+    assert canonical["audio_backend"] == "html5"
+
+
+def test_active_profile_none_and_origin_mismatch():
+    assert md.active_timing_profile(None) is None
+    canonical, err = md._normalise_timing(_timing())
+    assert err is None
+    assert md.active_timing_profile(canonical, "desktop", "juce") is None
+
+
+def test_active_profile_incomplete_tag_without_origin():
+    canonical, err = md._normalise_timing({"offset_ms": 8, "audio_backend": "html5"})
+    assert err is None
+    active = md.active_timing_profile(canonical)
+    assert active["offset_ms"] == 8.0
+    assert active["audio_backend"] == "html5"
+    assert md.active_timing_profile(canonical, audio_backend="juce") is None
+
+
+def test_select_unknown_origin_returns_none_without_wipe():
+    canonical, err = md._normalise_timing(_timing())
+    assert err is None
+    switched = md.select_timing_profile(canonical, "desktop", "juce")
+    assert switched is None
+    assert canonical["offset_ms"] == 12.5
+    assert "profiles" not in canonical
+
+
+def test_select_matching_origin_on_old_format_synthesizes_profile():
+    canonical, err = md._normalise_timing(_timing())
+    assert err is None
+    assert "profiles" not in canonical
+    switched = md.select_timing_profile(canonical, "web-midi", "html5")
+    assert switched is not None
+    assert switched["offset_ms"] == 12.5
+    assert switched["profiles"] == [
+        {"origin": "web-midi", "audio_backend": "html5", "offset_ms": 12.5},
+    ]
+
+
+def test_third_save_updates_matching_profile_keeps_other(tmp_path: Path):
+    md.save_device(
+        tmp_path,
+        _device(timing=_timing(offset_ms=12.5, origin="web-midi", audio_backend="html5")),
+    )
+    md.save_device(
+        tmp_path,
+        _device(timing=_timing(offset_ms=40.0, origin="desktop", audio_backend="juce")),
+    )
+    third, err = md.save_device(
+        tmp_path,
+        _device(timing=_timing(offset_ms=7.0, origin="web-midi", audio_backend="html5")),
+    )
+    assert err is None
+    keys = {(p["origin"], p["audio_backend"], p["offset_ms"]) for p in third["timing"]["profiles"]}
+    assert ("web-midi", "html5", 7.0) in keys
+    assert ("desktop", "juce", 40.0) in keys
+    assert third["timing"]["offset_ms"] == 7.0
+
+
+def test_upsert_from_unset_timing():
+    updated, err = md.upsert_timing_profile(
+        None, origin="web-midi", audio_backend="html5", offset_ms=5.0,
+    )
+    assert err is None
+    assert updated["offset_ms"] == 5.0
+    assert updated["origin"] == "web-midi"
+    active = md.active_timing_profile(updated)
+    assert active["offset_ms"] == 5.0
+
+
+def test_profile_offset_clamped_like_cache():
+    raw = _timing(offset_ms=1e9)
+    raw["profiles"] = [
+        {"origin": "web-midi", "audio_backend": "html5", "offset_ms": 1e9},
+    ]
+    canonical, err = md._normalise_timing(raw)
+    assert err is None
+    assert canonical["offset_ms"] == 250.0
+    assert canonical["profiles"][0]["offset_ms"] == 250.0
