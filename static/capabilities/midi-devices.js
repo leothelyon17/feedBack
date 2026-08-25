@@ -156,6 +156,43 @@
         return Array.isArray(raw) ? raw : [];
     }
 
+    // INIT-004/SPEC-001: timing is an optional device field. Known keys only;
+    // __proto__ / non-finite offset_ms are rejected; |offset_ms| is clamped to 250.
+    const OFFSET_MAX_MS = 250;
+    function _sanitizeTiming(raw) {
+        if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
+            throw new Error('timing must be an object');
+        }
+        if (Object.prototype.hasOwnProperty.call(raw, '__proto__')
+            || Object.prototype.hasOwnProperty.call(raw, 'constructor')
+            || Object.prototype.hasOwnProperty.call(raw, 'prototype')) {
+            throw new Error('invalid timing');
+        }
+        if (!Object.prototype.hasOwnProperty.call(raw, 'offset_ms')) {
+            throw new Error('offset_ms must be finite');
+        }
+        const offset = Number(raw.offset_ms);
+        if (!Number.isFinite(offset)) throw new Error('offset_ms must be finite');
+        const out = { offset_ms: Math.max(-OFFSET_MAX_MS, Math.min(OFFSET_MAX_MS, offset)) };
+        if (Object.prototype.hasOwnProperty.call(raw, 'origin') && raw.origin != null) {
+            out.origin = String(raw.origin);
+        }
+        if (Object.prototype.hasOwnProperty.call(raw, 'audio_backend') && raw.audio_backend != null) {
+            out.audio_backend = String(raw.audio_backend);
+        }
+        return out;
+    }
+
+    function _copyTimingIfPresent(prev, dest) {
+        if (!prev || !Object.prototype.hasOwnProperty.call(prev, 'timing') || prev.timing == null) {
+            return dest;
+        }
+        try {
+            dest.timing = _sanitizeTiming(prev.timing);
+        } catch (_) { /* omit a poisoned cached timing rather than drop the save */ }
+        return dest;
+    }
+
     function _toWire(device) {
         const sourceId = device.source_id == null ? '' : device.source_id;
         if (!_sourceIdOk(sourceId)) {
@@ -184,6 +221,10 @@
                 wire.family = (catalog && catalog.family) || 'drums';
             }
         }
+        // INIT-004/SPEC-001: persist timing when the caller supplied it.
+        if (Object.prototype.hasOwnProperty.call(device, 'timing') && device.timing != null) {
+            wire.timing = _sanitizeTiming(device.timing);
+        }
         return wire;
     }
 
@@ -198,6 +239,10 @@
             cloned.input = _sanitizeInput(cloned.input);
             if (Array.isArray(cloned.triggers)) {
                 cloned.triggers = _sanitizeTriggers(cloned.triggers);
+            }
+            if (Object.prototype.hasOwnProperty.call(cloned, 'timing') && cloned.timing != null) {
+                try { cloned.timing = _sanitizeTiming(cloned.timing); }
+                catch (_) { delete cloned.timing; }
             }
             _cache.byId.set(cloned.id, cloned);
             return cloned;
@@ -337,7 +382,7 @@
     function writeInputFields(state) {
         if (!hasActive()) return Promise.resolve(null);
         const prev = _cache.byId.get(_cache.activeId) || { id: _cache.activeId };
-        return save({
+        return save(_copyTimingIfPresent(prev, {
             id: _cache.activeId,
             name: prev.name || _cache.activeId,
             source_id: prev.source_id || '',
@@ -350,7 +395,7 @@
                 synth_volume: state && state.synth_volume,
             },
             triggers: _triggersOrEmpty(prev.triggers),
-        });
+        }));
     }
 
     function writeSourceId(deviceId, sourceId) {
@@ -360,7 +405,7 @@
         if (!_sourceIdOk(next)) throw new Error('source_id must be a logical midi-input id');
         const prev = _cache.byId.get(id) || { id };
         if ((prev.source_id || '') === next) return Promise.resolve(prev);
-        return save({
+        return save(_copyTimingIfPresent(prev, {
             id,
             name: prev.name || id,
             source_id: next,
@@ -369,14 +414,14 @@
             notes: prev.notes && typeof prev.notes === 'object' ? prev.notes : {},
             input: prev.input,
             triggers: _triggersOrEmpty(prev.triggers),
-        });
+        }));
     }
 
     function writeTriggers(deviceId, triggers) {
         const id = String(deviceId || '');
         if (!DEVICE_ID_RE.test(id)) throw new Error('invalid device id');
         const prev = _cache.byId.get(id) || { id };
-        return save({
+        return save(_copyTimingIfPresent(prev, {
             id,
             name: prev.name || id,
             source_id: prev.source_id || '',
@@ -385,6 +430,24 @@
             notes: prev.notes && typeof prev.notes === 'object' ? prev.notes : {},
             input: prev.input,
             triggers: _triggersOrEmpty(triggers),
+        }));
+    }
+
+    // INIT-004/SPEC-001: PUT timing on the active device document.
+    function writeTiming(timing) {
+        if (!hasActive()) return Promise.resolve(null);
+        const sanitized = _sanitizeTiming(timing);
+        const prev = _cache.byId.get(_cache.activeId) || { id: _cache.activeId };
+        return save({
+            id: _cache.activeId,
+            name: prev.name || _cache.activeId,
+            source_id: prev.source_id || '',
+            device_type_id: prev.device_type_id || '',
+            family: prev.family || '',
+            notes: prev.notes && typeof prev.notes === 'object' ? prev.notes : {},
+            input: prev.input,
+            triggers: _triggersOrEmpty(prev.triggers),
+            timing: sanitized,
         });
     }
 
@@ -491,6 +554,7 @@
         writeInputFields,
         writeSourceId,
         writeTriggers,
+        writeTiming,
         hydrate,
         subscribe,
         unsubscribe,

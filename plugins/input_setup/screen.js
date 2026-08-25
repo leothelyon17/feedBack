@@ -7,8 +7,9 @@
  *  3. renders the onboarding input-setup wizard (one pass per instrument):
  *       - guitar/bass → pick via `audio-input`, then launch note_detect's
  *         Calibration Wizard (note-detection is a deferred surface — JS API);
- *       - keys/drums  → pick via `midi-input`, then a live "play a note /
- *         hit a pad" confirmation.
+ *       - keys        → pick via `midi-input`, then a live "play a note" confirm;
+ *       - drums       → `feedBack.drumTiming.run({ requester: 'onboarding', mode: 'overlay' })`
+ *                       when that module exists, else today's hit-a-pad confirm.
  *
  * Idempotent (plugin-runtime-idempotent.v1): re-hydration is a no-op.
  */
@@ -123,7 +124,25 @@
             async function renderPanel(inst) {
                 const meta = INSTRUMENTS[inst];
                 if (meta.mode === 'audio') return renderAudioPanel(inst);
+                // INIT-004/SPEC-001: drums first-run launches the Calibration
+                // module (overlay) when present. Keys stay play-a-note.
+                if (inst === 'drums') {
+                    const run = window.feedBack && window.feedBack.drumTiming
+                        && window.feedBack.drumTiming.run;
+                    if (typeof run === 'function') {
+                        return renderDrumsCalibration(inst, run);
+                    }
+                }
                 return renderMidiPanel(inst);
+            }
+
+            function renderDrumsCalibration(inst, run) {
+                try { run({ requester: 'onboarding', mode: 'overlay' }); } catch (_) { /* overlay is optional until SPEC-002 */ }
+                shell(inst,
+                    '<p class="text-sm text-fb-textDim">Calibration is opening…</p>',
+                    '<button type="button" data-is-next class="bg-fb-primary text-white px-5 py-2 rounded-md font-medium">Continue</button>');
+                const nextBtn = host.querySelector('[data-is-next]');
+                if (nextBtn) nextBtn.addEventListener('click', () => advance(inst, true));
             }
 
             // Guitar/bass: show the audio source (audio-input) and launch the
@@ -249,7 +268,9 @@
                     if (myGen !== openSeq) { try { if (res) mi.close({ requester: 'input_setup', logicalSourceKey: requestedKey }); } catch (_) {} return; }
                     if (!res || !res.handle) { testEl.textContent = 'Could not open this device.'; activeKey = null; return; }
                     activeHandle = res.handle;
-                    listener = (data) => {
+                    listener = (msg) => {
+                        // INIT-004/SPEC-001: listeners now receive { data, timeStamp }.
+                        const data = msg && msg.data != null ? msg.data : msg;
                         // 0x90 = note-on (any channel); velocity > 0.
                         if (data && (data[0] & 0xf0) === 0x90 && data[2] > 0) {
                             testEl.innerHTML = '<span class="text-fb-primary font-semibold">✓ Got it</span> — device is working.';

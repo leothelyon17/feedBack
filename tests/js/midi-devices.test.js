@@ -29,6 +29,7 @@ function deviceDoc(id, extras) {
     if (extras && Object.prototype.hasOwnProperty.call(extras, 'triggers')) {
         doc.triggers = extras.triggers;
     }
+    if (extras && extras.timing) doc.timing = extras.timing;
     return Object.assign(doc, extras && extras.rest);
 }
 
@@ -1178,6 +1179,84 @@ test('delete trigger removes the row and its notes', async () => {
     assert.equal(last.notes['38'], 'snare');
     assert.equal(findByDataset(window.document.getElementById('midi-map-body'), 'triggerId', 'kick'), null);
     assert.ok(findByDataset(window.document.getElementById('midi-map-body'), 'triggerId', 'snare'));
+});
+
+// ── INIT-004/SPEC-001: timing accessor ──────────────────────────────────
+
+test('writeTiming PUTs timing on the active device', async () => {
+    const living = deviceDoc('living-room-ekit', { notes: { 36: 'kick' } });
+    const { md, calls } = fresh({ devices: [living], active: 'living-room-ekit' });
+    await settle();
+    await md().writeTiming({ offset_ms: 18, origin: 'localhost', audio_backend: 'webaudio' });
+    const puts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/living-room-ekit');
+    assert.ok(puts.length >= 1);
+    const last = puts[puts.length - 1].body;
+    assert.equal(last.timing.offset_ms, 18);
+    assert.equal(last.timing.origin, 'localhost');
+    assert.equal(last.timing.audio_backend, 'webaudio');
+    assert.equal(last.notes['36'], 'kick');
+});
+
+test('writeTiming rejects __proto__ and non-finite offset_ms', async () => {
+    const living = deviceDoc('living-room-ekit');
+    const { md, calls } = fresh({ devices: [living], active: 'living-room-ekit' });
+    await settle();
+    const before = calls.length;
+    assert.throws(() => md().writeTiming({ offset_ms: Number.NaN }), /finite/);
+    assert.throws(() => md().writeTiming({ offset_ms: 10, constructor: { name: 'x' } }), /invalid timing/);
+    const protoOwn = Object.defineProperty({ offset_ms: 10 }, '__proto__', {
+        value: { admin: true },
+        enumerable: true,
+        configurable: true,
+    });
+    assert.throws(() => md().writeTiming(protoOwn), /invalid timing/);
+    const writes = calls.slice(before).filter((c) => c.method === 'PUT');
+    assert.equal(writes.length, 0);
+});
+
+test('writeTiming clamps |offset_ms| to 250 before PUT', async () => {
+    const living = deviceDoc('living-room-ekit');
+    const { md, calls } = fresh({ devices: [living], active: 'living-room-ekit' });
+    await settle();
+    await md().writeTiming({ offset_ms: 400 });
+    const puts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/living-room-ekit');
+    assert.equal(puts[puts.length - 1].body.timing.offset_ms, 250);
+    await md().writeTiming({ offset_ms: -900 });
+    const puts2 = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/living-room-ekit');
+    assert.equal(puts2[puts2.length - 1].body.timing.offset_ms, -250);
+});
+
+test('writeInputFields after a cached timing still sends it', async () => {
+    const living = deviceDoc('living-room-ekit', {
+        notes: { 36: 'kick' },
+        timing: { offset_ms: 22, origin: 'localhost', audio_backend: 'webaudio' },
+    });
+    const { md, calls } = fresh({ devices: [living], active: 'living-room-ekit' });
+    await settle();
+    await md().writeInputFields({ midi_channel: 9, hit_detection: true, synth_volume: 0.25 });
+    const puts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/living-room-ekit');
+    assert.ok(puts.length >= 1);
+    const last = puts[puts.length - 1].body;
+    assert.equal(last.timing.offset_ms, 22);
+    assert.equal(last.input.midi_channel, 9);
+});
+
+test('writeSourceId and writeTriggers round-trip cached timing', async () => {
+    const living = deviceDoc('living-room-ekit', {
+        notes: { 36: 'kick' },
+        source_id: 'web-midi::pad-1',
+        timing: { offset_ms: -7, origin: 'nas', audio_backend: 'mediaelement' },
+        triggers: [{ id: 'kick', name: 'Kick' }],
+    });
+    const { md, calls } = fresh({ devices: [living], active: 'living-room-ekit' });
+    await settle();
+    await md().writeSourceId('living-room-ekit', 'web-midi::pad-2');
+    const sourcePuts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/living-room-ekit');
+    assert.equal(sourcePuts[sourcePuts.length - 1].body.timing.offset_ms, -7);
+    await md().writeTriggers('living-room-ekit', [{ id: 'snare', name: 'Snare' }]);
+    const allPuts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/living-room-ekit');
+    assert.equal(allPuts[allPuts.length - 1].body.timing.offset_ms, -7);
+    assert.equal(allPuts[allPuts.length - 1].body.timing.origin, 'nas');
 });
 
 test('Note map add-trigger row exists in the MIDI tabpanel', () => {

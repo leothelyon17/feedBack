@@ -44,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **Tap-to-beat and MIDI Calibration host (INIT-004/SPEC-001).** Web MIDI
+  listeners now receive `{ data, timeStamp }`. `feedBack.tapToBeat` converts
+  that stamp onto `highway.getTime()`, finds the nearest metronome click, and
+  reduces a held-out session (N_min=16, N_verify=8). Settings → MIDI gains a
+  **Calibration** section (`#midi-calibration-panel`) after MIDI Settings.
+  `midiDevices.writeTiming` PUTs `timing` on the active device; existing
+  `write*` helpers keep a cached `timing` on the next save. Onboarding drums
+  launches `feedBack.drumTiming.run({ requester: 'onboarding', mode: 'overlay' })`
+  when that module exists. A finite drum offset never writes `av_offset_ms`.
 - **3D consumes MIDI device map (INIT-003/SPEC-013).** Bundled
   `drum_highway_3d` scores from the attached MIDI device's `notes` via
   `feedBack.midiDevices.get(profile.device_id)` on
