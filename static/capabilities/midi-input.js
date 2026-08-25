@@ -56,6 +56,17 @@
         return out;
     }
 
+    // INIT-004/SPEC-001: DOM MIDIMessageEvent.timeStamp. Missing/0/non-finite
+    // falls back to 0 and flags low-confidence so convert() never feeds NaN.
+    function _readTimeStamp(e) {
+        const raw = e && e.timeStamp;
+        const n = Number(raw);
+        if (raw == null || raw === 0 || !Number.isFinite(n)) {
+            return { timeStamp: 0, lowConfidence: true };
+        }
+        return { timeStamp: n, lowConfidence: false };
+    }
+
     function _emitLiveMessage(detail) {
         messageWatchers.forEach((fn) => { try { fn(detail); } catch (_) { /* watcher isolation */ } });
     }
@@ -451,12 +462,21 @@
             const onMidi = function (e) {
                 const data = _copyMidiBytes(e);
                 if (!data) return;
-                slot.listeners.forEach((fn) => { try { fn(data); } catch (_) { /* listener isolation */ } });
+                // INIT-004/SPEC-001: listeners receive { data, timeStamp }.
+                const ts = _readTimeStamp(e);
+                const payload = {
+                    data: data,
+                    timeStamp: ts.timeStamp,
+                    lowConfidence: ts.lowConfidence,
+                };
+                slot.listeners.forEach((fn) => { try { fn(payload); } catch (_) { /* listener isolation */ } });
                 _emitLiveMessage({
                     sourceId: sourceId,
                     logicalSourceKey: 'web-midi::' + sourceId,
                     label: label,
                     data: data,
+                    timeStamp: ts.timeStamp,
+                    lowConfidence: ts.lowConfidence,
                 });
             };
             slot._onMidi = onMidi;

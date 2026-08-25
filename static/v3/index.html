@@ -140,6 +140,8 @@
          Loaded after midi-input.js so the Settings MIDI panel can list
          logical sources (labels display-only). -->
     <script type="module" src="/static/capabilities/midi-devices.js?v=midi-learn-9"></script>
+    <!-- INIT-004/SPEC-001: tap-to-beat math (getTime plane, held-out session). -->
+    <script type="module" src="/static/js/tap-to-beat.js"></script>
     <!-- INIT-002/SPEC-002: shared drum MIDI-input/settings contract for the
          2D and 3D drum highways. Loaded after midi-input.js for consistency
          with the other domain-adjacent capabilities above, though it does
@@ -1095,6 +1097,9 @@
                         <input type="range" id="midi-input-synth-vol" min="0" max="1" step="0.01" value="0.7" class="w-full">
                     </div>
                 </div>
+                <!-- INIT-004/SPEC-001: Calibration host stub. SPEC-002 mounts the ritual here. -->
+                <div class="fb-tabpanel-head"><h3>Calibration</h3></div>
+                <div id="midi-calibration-panel" class="space-y-3"></div>
                 <div id="plugin-settings-midi" class="space-y-3"></div>
             </div>
         </div>

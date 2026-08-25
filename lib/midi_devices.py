@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import tempfile
@@ -40,6 +41,18 @@ _DANGEROUS_KEYS = frozenset({"__proto__", "constructor", "prototype"})
 _DEVICE_BODY_MAX = 64 * 1024
 _DEVICE_COUNT_MAX = 64
 _MIGRATE_SENTINEL_NAME = "overlay-kit-notes-migrated"
+# INIT-004/SPEC-006: optional Calibration persist on the device document.
+_TIMING_OFFSET_MIN_MS = -250.0
+_TIMING_OFFSET_MAX_MS = 250.0
+_TIMING_BACKENDS = frozenset({"html5", "juce"})
+_TIMING_CANONICAL_KEYS = (
+    "offset_ms",
+    "measured_at",
+    "n",
+    "median_abs_error_ms",
+    "origin",
+    "audio_backend",
+)
 
 _DEFAULT_INPUT = {
     "midi_channel": -1,
@@ -124,6 +137,67 @@ def _normalise_input(raw: object) -> dict | None:
     }
 
 
+def _finite_number(raw: object) -> float | None:
+    """True numeric value. Rejects bool, NaN, Inf, and non-numbers."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    n = float(raw)
+    if not math.isfinite(n):
+        return None
+    return n
+
+
+def _normalise_timing(raw: object) -> tuple[dict | None, str | None]:
+    """Canonical timing or None (Not set). Error string on reject.
+
+    None / {} → Not set (not +0). offset_ms is clamped to [-250, 250].
+    Extra keys are dropped. INIT-004/SPEC-006.
+    """
+    if raw is None:
+        return None, None
+    if not isinstance(raw, dict):
+        return None, "timing must be an object"
+    if _has_dangerous_keys(raw):
+        return None, "timing contains reserved keys"
+    if not raw:
+        return None, None
+    offset = _finite_number(raw.get("offset_ms"))
+    if offset is None:
+        return None, "timing.offset_ms must be a finite number"
+    if offset < _TIMING_OFFSET_MIN_MS:
+        offset = _TIMING_OFFSET_MIN_MS
+    elif offset > _TIMING_OFFSET_MAX_MS:
+        offset = _TIMING_OFFSET_MAX_MS
+    backend = raw.get("audio_backend")
+    if backend not in _TIMING_BACKENDS:
+        return None, "timing.audio_backend must be html5 or juce"
+    out: dict = {
+        "offset_ms": offset,
+        "audio_backend": backend,
+    }
+    measured_at = raw.get("measured_at")
+    if measured_at is not None:
+        if not isinstance(measured_at, str):
+            return None, "timing.measured_at must be a string"
+        out["measured_at"] = measured_at
+    n_raw = raw.get("n")
+    if n_raw is not None:
+        if isinstance(n_raw, bool) or not isinstance(n_raw, int) or n_raw < 0:
+            return None, "timing.n must be a non-negative integer"
+        out["n"] = n_raw
+    if "median_abs_error_ms" in raw and raw.get("median_abs_error_ms") is not None:
+        mae = _finite_number(raw.get("median_abs_error_ms"))
+        if mae is None:
+            return None, "timing.median_abs_error_ms must be a finite number"
+        out["median_abs_error_ms"] = mae
+    origin = raw.get("origin")
+    if origin is not None:
+        if not isinstance(origin, str) or not origin.strip():
+            return None, "timing.origin must be a non-empty string"
+        out["origin"] = origin.strip()
+    return {key: out[key] for key in _TIMING_CANONICAL_KEYS if key in out}, None
+
+
 def _copy_trigger_rows(rows: object) -> list[dict]:
     """Canonical trigger rows via the catalog parser. Skip bad rows."""
     out: list[dict] = []
@@ -190,7 +264,8 @@ def validate_device(
     Refuses raw MIDI port labels on source_id, unknown device_type_id,
     family mismatch vs the catalog, reserved keys, and a notes seed.
     Empty notes is valid. Omitted triggers default to a catalog copy so
-    old on-disk devices keep loading. INIT-003/SPEC-008.
+    old on-disk devices keep loading. Optional timing is omitted when
+    unset (not +0). INIT-003/SPEC-008, INIT-004/SPEC-006.
     """
     if not isinstance(obj, dict):
         return None, "device body must be an object"
@@ -229,6 +304,11 @@ def validate_device(
     inp = _normalise_input(obj.get("input"))
     if inp is None:
         return None, "input must be an object"
+    timing = None
+    if "timing" in obj:
+        timing, timing_err = _normalise_timing(obj.get("timing"))
+        if timing_err is not None:
+            return None, timing_err
     canonical = {
         "id": did,
         "name": name.strip(),
@@ -239,6 +319,8 @@ def validate_device(
         "triggers": triggers,
         "input": inp,
     }
+    if timing is not None:
+        canonical["timing"] = timing
     return canonical, None
 
 
@@ -333,21 +415,32 @@ def save_device(
     obj: dict,
     device_id: str | None = None,
 ) -> tuple[dict | None, str | None]:
-    """Validate and atomically write a device. Notes default to {}."""
+    """Validate and atomically write a device. Notes default to {}.
+
+    Omitted `timing` on an existing file preserves on-disk timing.
+    Explicit `timing: null` (or `{}`) clears. Create-with-omit writes
+    no key. INIT-004/SPEC-006.
+    """
+    incoming_omits_timing = isinstance(obj, dict) and "timing" not in obj
     canonical, err = validate_device(obj, device_id, config_dir=config_dir)
     if canonical is None:
         return None, err
     dest = device_path(config_dir, canonical["id"])
     if dest is None:
         return None, "device id rejected by path containment"
-    payload = json.dumps(canonical, indent=2).encode("utf-8")
-    if len(payload) > _DEVICE_BODY_MAX:
-        return None, "device body exceeds 64 KiB"
     with _device_lock:
         root = devices_dir(config_dir)
         exists = dest.is_file()
         if not exists and root.is_dir() and _json_file_count(root) >= _DEVICE_COUNT_MAX:
             return None, "device count cap reached"
+        if incoming_omits_timing and exists:
+            prior = load_device_file(dest, config_dir=config_dir)
+            if prior is not None and "timing" in prior:
+                canonical = dict(canonical)
+                canonical["timing"] = prior["timing"]
+        payload = json.dumps(canonical, indent=2).encode("utf-8")
+        if len(payload) > _DEVICE_BODY_MAX:
+            return None, "device body exceeds 64 KiB"
         try:
             _atomic_write(dest, payload)
         except OSError as exc:

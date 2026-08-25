@@ -44,6 +44,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **3D drum highway judges on the MIDI clock (INIT-004/SPEC-005).** Bundled
+  `drum_highway_3d` maps each MIDI `timeStamp` onto `highway.getTime()`,
+  subtracts `feedBack.drumTiming.getOffsetMs()` (0 when that getter is
+  absent), and scores against note time. Gems still draw on visual
+  `currentTime`. A finite drum offset never writes `av_offset_ms` or
+  calls `setAvOffset`. The ±50 ms hit window is unchanged.
+- **MIDI device API round-trips `timing` (INIT-004/SPEC-007).** GET/list
+  include the Calibration object when set and omit the key when Not set.
+  PUT `/api/midi/devices` and PUT `/api/midi/devices/{id}` persist `timing`
+  through `save_device` (omit preserves, `null` clears). A notes/input PUT
+  that forgets the key does not wipe a prior save; the response still
+  returns the preserved object. No `/api/settings` drum-timing key.
+- **MIDI device `timing` field (INIT-004/SPEC-006).** Device JSON may carry
+  an optional Calibration object `{offset_ms, measured_at, n,
+  median_abs_error_ms, origin, audio_backend}`. Omitted key is Not set
+  (not +0). `save_device` preserves on-disk `timing` when a later write
+  omits the key (INIT-003 channel / Learn / trigger PUTs); `timing: null`
+  or `{}` clears. `offset_ms` is clamped to [-250, 250]; `audio_backend`
+  is `html5` or `juce`. Create-from-type and overlay-kit migrate do not
+  seed `timing`. Drum profiles still reject `notes` and do not grow a
+  `timing` field.
+- **Tap-to-beat and MIDI Calibration host (INIT-004/SPEC-001).** Web MIDI
+  listeners now receive `{ data, timeStamp }`. `feedBack.tapToBeat` converts
+  that stamp onto `highway.getTime()`, finds the nearest metronome click, and
+  reduces a held-out session (N_min=16, N_verify=8). Settings → MIDI gains a
+  **Calibration** section (`#midi-calibration-panel`) after MIDI Settings.
+  `midiDevices.writeTiming` PUTs `timing` on the active device; existing
+  `write*` helpers keep a cached `timing` on the next save. Onboarding drums
+  launches `feedBack.drumTiming.run({ requester: 'onboarding', mode: 'overlay' })`
+  when that module exists. A finite drum offset never writes `av_offset_ms`.
+- **Bundled 4/4 rock drum chart (INIT-004/SPEC-004).** A generated
+  kick/snare/hat `.feedpak` seeds once into
+  `starter/feedBack-diagnostic-basic-drums.feedpak` via its own marker, so
+  existing installs that already have starter content still receive it.
+  It is a suggested library song, not the guitar diagnostic: it does not
+  join `BUILTIN_DIAGNOSTIC_SOURCES` and does not complete
+  `calibration_completed`.
 - **3D consumes MIDI device map (INIT-003/SPEC-013).** Bundled
   `drum_highway_3d` scores from the attached MIDI device's `notes` via
   `feedBack.midiDevices.get(profile.device_id)` on

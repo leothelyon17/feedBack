@@ -556,6 +556,139 @@
     // ±50 ms hit window — same as the 2D drums plugin so users get
     // identical timing across both visualisations.
     const HIT_TOLERANCE_S = 0.05;
+
+    // INIT-004/SPEC-005: MIDI timeStamp → highway.getTime() → effective_t.
+    // Conformist consumer of feedBack.drumTiming.getOffsetMs() (0 if absent).
+    // Never writes the visual A/V trim. Gems may still draw on visual
+    // currentTime; the hit judge must not.
+
+    function _nowMs() {
+        if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+            const n = Number(performance.now());
+            if (Number.isFinite(n)) return n;
+        }
+        return 0;
+    }
+
+    function _highwayGetTime() {
+        try {
+            const hw = typeof window !== 'undefined' ? window.highway : null;
+            if (hw && typeof hw.getTime === 'function') {
+                const t = Number(hw.getTime());
+                if (Number.isFinite(t)) return t;
+            }
+        } catch (_) { /* degrade to 0 */ }
+        return 0;
+    }
+
+    function _readDrumOffsetMs() {
+        try {
+            const api = typeof window !== 'undefined' && window.feedBack && window.feedBack.drumTiming;
+            if (api && typeof api.getOffsetMs === 'function') {
+                const n = Number(api.getOffsetMs());
+                return Number.isFinite(n) ? n : 0;
+            }
+        } catch (_) { /* missing getter ⇒ 0 */ }
+        return 0;
+    }
+
+    function _applyDrumOffsetSec(clockSec, offsetMs) {
+        const t = Number(clockSec);
+        if (!Number.isFinite(t)) return NaN;
+        const off = Number(offsetMs);
+        const safeOff = Number.isFinite(off) ? off : 0;
+        return t - safeOff / 1000;
+    }
+
+    function _convertMidiFallback(midiTimeStamp, getTimeFn, now) {
+        let ts = Number(midiTimeStamp);
+        if (!Number.isFinite(ts) || ts === 0) ts = now;
+        const chartT = Number(typeof getTimeFn === 'function' ? getTimeFn() : 0);
+        const base = Number.isFinite(chartT) ? chartT : 0;
+        const tChart = base + (ts - now) / 1000;
+        return Number.isFinite(tChart) ? tChart : base;
+    }
+
+    function _judgeTimeFromMidi(midiTimeStamp, opts) {
+        const options = opts && typeof opts === 'object' ? opts : {};
+        const getTimeFn = typeof options.getTime === 'function' ? options.getTime : _highwayGetTime;
+        const now = (options.now != null && Number.isFinite(Number(options.now)))
+            ? Number(options.now)
+            : _nowMs();
+        let offsetMs = options.offsetMs;
+        if (offsetMs == null) offsetMs = _readDrumOffsetMs();
+        else {
+            offsetMs = Number(offsetMs);
+            if (!Number.isFinite(offsetMs)) offsetMs = 0;
+        }
+
+        const tap = (typeof window !== 'undefined' && window.feedBack) ? window.feedBack.tapToBeat : null;
+        let tChart;
+        if (tap && typeof tap.convert === 'function') {
+            try {
+                const conv = tap.convert(midiTimeStamp, { getTime: getTimeFn, now: now });
+                tChart = conv && conv.tChart;
+            } catch (_) {
+                tChart = NaN;
+            }
+        } else {
+            tChart = _convertMidiFallback(midiTimeStamp, getTimeFn, now);
+        }
+        if (!Number.isFinite(tChart)) return NaN;
+
+        let t;
+        if (tap && typeof tap.effectiveT === 'function') {
+            try {
+                t = tap.effectiveT(tChart, offsetMs);
+            } catch (_) {
+                t = NaN;
+            }
+        } else {
+            t = tChart - offsetMs / 1000;
+        }
+        return Number.isFinite(t) ? t : NaN;
+    }
+
+    function _midiNoteHitKey(t, lane) {
+        return t.toFixed(3) + '|' + lane;
+    }
+
+    // Chart match at the MIDI/input clock. Non-finite t skips (same as
+    // empty-chart). Does not read bundle.currentTime.
+    function _judgeDrumHit(playedMidi, timeStamp, snapshot) {
+        const snap = snapshot && typeof snapshot === 'object' ? snapshot : {};
+        const notes = snap.notes;
+        if (!notes || notes.length === 0) return { kind: 'skip', reason: 'empty-chart' };
+
+        const t = _judgeTimeFromMidi(timeStamp, snap);
+        if (!Number.isFinite(t)) return { kind: 'skip', reason: 'non-finite-t' };
+
+        const piece = snap.piece !== undefined ? snap.piece : _midiToPiece(playedMidi);
+        const lane = piece !== undefined ? PIECE_TO_LANE[piece] : undefined;
+        if (lane === undefined) return { kind: 'skip', reason: 'unmapped' };
+
+        const hitKeys = snap.hitKeys || new Set();
+        for (const n of notes) {
+            if (n.t > t + HIT_TOLERANCE_S) break;
+            if (n.t < t - HIT_TOLERANCE_S) continue;
+            if (n.lane !== lane) continue;
+            const key = _midiNoteHitKey(n.t, n.lane);
+            if (hitKeys.has(key)) continue;
+            hitKeys.add(key);
+            return { kind: 'hit', t, key, lane, matchedDelta: n.t - t };
+        }
+        return { kind: 'miss', t, lane };
+    }
+
+    // Host midi-input (SPEC-001) delivers { data, timeStamp }. Older
+    // handles delivered a raw byte array; accept both.
+    function _midiPayloadToEvent(msg) {
+        if (msg && typeof msg === 'object' && msg.data != null && typeof msg.data.length === 'number') {
+            return { data: msg.data, timeStamp: msg.timeStamp };
+        }
+        return { data: msg, timeStamp: 0 };
+    }
+
     // Legacy id-only storage key. Read for migration; new writes go to
     // LS_MIDI_PICK (id + name).
     const LS_MIDI_INPUT = 'drum_h3d_midi_input';
@@ -809,9 +942,9 @@
                     }
                     if (res && res.handle) {
                         _midiHandle = res.handle;
-                        // The domain handle delivers raw MIDI data; adapt to the
-                        // old MIDIMessageEvent shape so _midiOnMessage is unchanged.
-                        _midiListener = (data) => _midiOnMessage({ data });
+                        // SPEC-001 handle delivers { data, timeStamp }. Forward
+                        // both so the hit judge can map the stamp onto getTime().
+                        _midiListener = (msg) => _midiOnMessage(_midiPayloadToEvent(msg));
                         if (_midiActive) _midiHandle.addListener(_midiListener);
                     } else {
                         // Open yielded no live handle (device vanished post-discovery,
@@ -874,7 +1007,7 @@
             return _completeLearn(note);
         }
         if (!_activeInstance) return;
-        _activeInstance._handleDrumHit(note, vel);
+        _activeInstance._handleDrumHit(note, vel, e && e.timeStamp);
     }
 
     // Fired when the MIDI access state changes (device plugged/unplugged
@@ -2965,7 +3098,9 @@
         // index, scans the visible chart window for an un-hit matching
         // note within ±HIT_TOLERANCE_S, and updates scoring + visual
         // feedback. Wrong-piece or missed-window hits flash red.
-        function _handleDrumHit(midiNote, velocity) {
+        // INIT-004/SPEC-005: judge on MIDI timeStamp → getTime() →
+        // effective_t. Do not read _latestTime / visual clock as the judge.
+        function _handleDrumHit(midiNote, velocity, timeStamp) {
             _synthDrumHit(midiNote, velocity);
             _synthEnsureCtx();
 
@@ -2993,27 +3128,18 @@
                 return;
             }
 
-            const t = _latestTime;
+            const result = _judgeDrumHit(midiNote, timeStamp, {
+                notes: _latestNotes,
+                hitKeys: _hitKeys,
+                piece,
+            });
+            if (!result || result.kind === 'skip') return;
 
-            let foundHit = false;
-            let matchedDelta = 0;   // note.t - now of the matched note (timing verdict)
-            for (const n of _latestNotes) {
-                if (n.t > t + HIT_TOLERANCE_S) break;
-                if (n.t < t - HIT_TOLERANCE_S) continue;
-                if (n.lane !== lane) continue;
-                const key = _hitKey(n.t, n.lane);
-                if (_hitKeys.has(key)) continue;
-                _hitKeys.add(key);
-                foundHit = true;
-                matchedDelta = n.t - t;
-                break;
-            }
-
-            if (foundHit) {
+            if (result.kind === 'hit') {
                 _hits++;
                 _streak++;
                 if (_streak > _bestStreak) _bestStreak = _streak;
-                const ts = _classifyTiming(matchedDelta, HIT_TOLERANCE_S);
+                const ts = _classifyTiming(result.matchedDelta, HIT_TOLERANCE_S);
                 _laneFlashes.push({ lane, wall: performance.now(), kind: 'hit', ts });
                 _spawnHitFx(lane, ts, false);
                 _scoreOnHit(lane);
@@ -4163,6 +4289,11 @@
                 // which no events can arrive — counting passes then would bank false
                 // misses. _midiHandle is truthy only after a handle is opened+wired.
                 if (_midiHandle && _inputSettings.hitDetection) {
+                    // Miss sweep uses the same input clock as the hit judge
+                    // (getTime minus device offset). Gem draw below still
+                    // walks visual `t` (bundle.currentTime).
+                    const judgeClock = _applyDrumOffsetSec(_highwayGetTime(), _readDrumOffsetMs());
+                    const missT = Number.isFinite(judgeClock) ? judgeClock : t;
                     if (_midiJustConnected) {
                         _midiJustConnected = false;
                         _resetScoring();
@@ -4170,12 +4301,12 @@
                         // the _updateMissed call right below would bank the
                         // last ~2 s of notes as misses even though no input
                         // could have arrived for them yet.
-                        _missSweepFloor = t;
+                        _missSweepFloor = missT;
                     }
                     // Seek-back past the floor makes those notes playable
                     // again — let them count.
-                    if (t < _missSweepFloor) _missSweepFloor = t;
-                    _updateMissed(t);
+                    if (missT < _missSweepFloor) _missSweepFloor = missT;
+                    _updateMissed(missT);
                 }
                 // Linear walk with early break — notes are sorted by time so
                 // the first note beyond AHEAD ends the visible window.
@@ -4821,6 +4952,15 @@
         ALL_PIECES,
         LS_KIT_CONFIG,
         HIT_TOLERANCE_S,
+        _nowMs,
+        _highwayGetTime,
+        _readDrumOffsetMs,
+        _applyDrumOffsetSec,
+        _convertMidiFallback,
+        _judgeTimeFromMidi,
+        _judgeDrumHit,
+        _midiPayloadToEvent,
+        _midiNoteHitKey,
         _parseVocabulary,
         _parseKitNotes,
         _applyVocabulary,
@@ -4935,9 +5075,9 @@
     // (the demo pattern scrolls every frame, so pixel-diff assertions can't
     // distinguish FX from scroll — this probe can).
     window.__drumHwTest = {
-        injectHit(midiNote, velocity) {
+        injectHit(midiNote, velocity, timeStamp) {
             if (_activeInstance && typeof _activeInstance._handleDrumHit === 'function') {
-                _activeInstance._handleDrumHit(midiNote, velocity == null ? 100 : velocity);
+                _activeInstance._handleDrumHit(midiNote, velocity == null ? 100 : velocity, timeStamp);
             }
         },
         probe() {

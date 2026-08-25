@@ -573,6 +573,21 @@ def test_evaluate_event_quest_completion_feeds_challenges():
     assert outcome["level_ups"] == [{"path_id": "guitar", "new_level": 1}]
 
 
+def test_evaluate_event_drum_timing_pack_does_not_complete_calibration():
+    """INIT-004/SPEC-004: the bundled 4/4 rock chart is not the guitar diagnostic."""
+    import builtin_content
+
+    drums = builtin_content.builtin_drum_timing_filename()
+    guitar = builtin_content.builtin_diagnostic_filename()
+    assert drums != guitar
+    outcome = evaluate_event(
+        _song_event(filename=drums, is_diagnostic=False, accuracy=1.0),
+        _content(),
+        _snapshot(calibration_status="pending"),
+    )
+    assert outcome["calibration_completed"] is False
+
+
 def test_evaluate_event_calibration():
     content = _content()
     diag = _song_event(is_diagnostic=True, accuracy=1.0)

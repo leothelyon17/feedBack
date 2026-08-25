@@ -200,7 +200,7 @@ test('built-in Web-MIDI open shares one dispatcher (second open does not drop li
     await window.feedBack.midiInput.discover();
     const a = await window.feedBack.midiInput.open({ requester: 'learn', logicalSourceKey: 'web-midi::kb1' });
     const seen = [];
-    a.handle.addListener((d) => seen.push(Array.from(d)));
+    a.handle.addListener((d) => seen.push(Array.from(d.data)));
     const b = await window.feedBack.midiInput.open({ requester: 'drums', logicalSourceKey: 'web-midi::kb1' });
     assert.ok(b.handle);
     port.onmidimessage({ data: new Uint8Array([0x99, 38, 100]) });
@@ -286,6 +286,73 @@ test('built-in Web-MIDI provider self-registers + discovers, filtering loopback 
     const sources = window.feedBack.midiInput.listSources();
     assert.equal(sources.length, 1, 'loopback/passthrough ports are filtered');
     assert.equal(sources[0].logicalSourceKey, 'web-midi::kb1');
+});
+
+test('ac-1: listeners receive { data, timeStamp } from the DOM event', async () => {
+    const port = {
+        id: 'kb1',
+        name: 'Kit',
+        onmidimessage: null,
+        async open() { this.opened = true; },
+    };
+    const window = loadWithWebMidi([port]);
+    await window.feedBack.midiInput.discover();
+    const opened = await window.feedBack.midiInput.open({
+        requester: 'cal',
+        logicalSourceKey: 'web-midi::kb1',
+    });
+    const seen = [];
+    opened.handle.addListener((msg) => seen.push(msg));
+    port.onmidimessage({ data: new Uint8Array([0x99, 38, 100]), timeStamp: 1234.5 });
+    assert.equal(seen.length, 1);
+    assert.ok(seen[0].data);
+    assert.deepEqual(Array.from(seen[0].data), [0x99, 38, 100]);
+    assert.equal(seen[0].timeStamp, 1234.5);
+    assert.equal(seen[0].lowConfidence, false);
+});
+
+test('ac-1: missing/0 timeStamp falls back and flags low-confidence', async () => {
+    const port = {
+        id: 'kb1',
+        name: 'Kit',
+        onmidimessage: null,
+        async open() { this.opened = true; },
+    };
+    const window = loadWithWebMidi([port]);
+    await window.feedBack.midiInput.discover();
+    const opened = await window.feedBack.midiInput.open({
+        requester: 'cal',
+        logicalSourceKey: 'web-midi::kb1',
+    });
+    const seen = [];
+    opened.handle.addListener((msg) => seen.push(msg));
+    port.onmidimessage({ data: new Uint8Array([0x99, 38, 100]) });
+    port.onmidimessage({ data: new Uint8Array([0x99, 38, 90]), timeStamp: 0 });
+    port.onmidimessage({ data: new Uint8Array([0x99, 38, 80]), timeStamp: Number.NaN });
+    assert.equal(seen.length, 3);
+    for (const msg of seen) {
+        assert.equal(msg.timeStamp, 0);
+        assert.equal(msg.lowConfidence, true);
+        assert.ok(Number.isFinite(msg.timeStamp));
+    }
+});
+
+test('watchMessages includes timeStamp on the live fan-out', async () => {
+    const port = {
+        id: 'kb1',
+        name: 'Kit',
+        onmidimessage: null,
+        async open() { this.opened = true; },
+    };
+    const window = loadWithWebMidi([port]);
+    const seen = [];
+    window.feedBack.midiInput.watchMessages((m) => seen.push(m));
+    await window.feedBack.midiInput.discover();
+    port.onmidimessage({ data: new Uint8Array([0x99, 36, 80]), timeStamp: 88 });
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].timeStamp, 88);
+    assert.equal(seen[0].lowConfidence, false);
+    assert.equal(seen[0].data[1], 36);
 });
 
 test('diagnostics are redaction-safe (no device labels, no raw messages)', async () => {
