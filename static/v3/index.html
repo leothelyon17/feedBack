@@ -142,6 +142,9 @@
     <script type="module" src="/static/capabilities/midi-devices.js?v=midi-learn-9"></script>
     <!-- INIT-004/SPEC-001: tap-to-beat math (getTime plane, held-out session). -->
     <script type="module" src="/static/js/tap-to-beat.js"></script>
+    <!-- INIT-006/SPEC-004: probe AudioContext for an audio-latency hint (display
+         only until confirm). Loaded after midi-devices.js so confirm can PUT. -->
+    <script type="module" src="/static/js/audio-latency-hint.js"></script>
     <!-- INIT-002/SPEC-002: shared drum MIDI-input/settings contract for the
          2D and 3D drum highways. Loaded after midi-input.js for consistency
          with the other domain-adjacent capabilities above, though it does
@@ -1098,9 +1101,27 @@
                         <input type="range" id="midi-input-synth-vol" min="0" max="1" step="0.01" value="0.7" class="w-full">
                     </div>
                 </div>
-                <!-- INIT-004/SPEC-001: Calibration host stub. SPEC-002 mounts the ritual here. -->
+                <!-- INIT-004/SPEC-001: Calibration host stub. INIT-006/SPEC-004 mounts the audio-latency hint here. -->
                 <div class="fb-tabpanel-head"><h3>Calibration</h3></div>
-                <div id="midi-calibration-panel" class="space-y-3"></div>
+                <div id="midi-calibration-panel" class="space-y-3">
+                    <div id="audio-latency-hint">
+                        <h4 class="text-xs font-medium text-gray-300 mb-2">Audio output latency</h4>
+                        <p class="text-xs text-gray-500 mb-2">
+                            Hardware estimate (base latency plus output latency). It is a starting
+                            point, not a measured hit offset, and is not applied until you confirm.
+                        </p>
+                        <p id="audio-latency-hint-probe" class="text-xs text-gray-300 mb-3" role="status" aria-live="polite">Not reported</p>
+                        <label for="audio-latency-hint-override" class="text-xs font-medium text-gray-400 mb-1 block">Override (ms)</label>
+                        <input id="audio-latency-hint-override" type="number" step="1" inputmode="decimal"
+                            aria-label="Audio latency hint override in milliseconds"
+                            class="w-full bg-dark-700 border border-gray-800 rounded-xl px-3 py-2.5 text-sm text-gray-300 outline-none">
+                        <button type="button" id="audio-latency-hint-confirm"
+                            class="mt-3 px-3 py-1.5 bg-dark-700 hover:bg-dark-600 rounded-lg text-xs">
+                            Save latency hint
+                        </button>
+                        <p id="audio-latency-hint-status" class="text-xs text-gray-400 mt-2" role="status" aria-live="polite"></p>
+                    </div>
+                </div>
                 <div id="plugin-settings-midi" class="space-y-3"></div>
             </div>
         </div>

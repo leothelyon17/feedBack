@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **Audio output latency hint on MIDI Calibration (INIT-006/SPEC-004).**
+  Settings → MIDI Calibration probes a short-lived `AudioContext` for
+  `baseLatency + outputLatency` and shows the sum in ms as an estimate.
+  Missing, non-finite, or silent-0 figures stay **Not reported**. The
+  player override is persisted as `timing.audio_latency_hint_ms` only on
+  explicit confirm via `midiDevices.writeTiming`; judged `offset_ms` is
+  unchanged. The JUCE backend never reports Web Audio `outputLatency`.
 - **MIDI device API round-trips timing profiles and audio-latency hint
   (INIT-006/SPEC-006).** GET `/api/midi/devices` and GET by id include
   `timing.profiles` and `timing.audio_latency_hint_ms` when the device
