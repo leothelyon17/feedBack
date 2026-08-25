@@ -237,6 +237,8 @@ def background_scan(force: bool = False):
 
     builtin_content.seed_builtin_diagnostic_sloppaks(appstate.server_root, dlc)
     builtin_content.seed_builtin_starter_content(appstate.server_root, dlc)
+    # INIT-004/SPEC-004: own marker, not gated by .starter-content-seeded.
+    builtin_content.seed_builtin_drum_timing_content(appstate.server_root, dlc)
 
     # Fast path: if every library directory recorded by the last scan still has
     # the same mtime, nothing was added, removed, or renamed, so the whole

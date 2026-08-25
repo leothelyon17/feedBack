@@ -68,6 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `write*` helpers keep a cached `timing` on the next save. Onboarding drums
   launches `feedBack.drumTiming.run({ requester: 'onboarding', mode: 'overlay' })`
   when that module exists. A finite drum offset never writes `av_offset_ms`.
+- **Bundled 4/4 rock drum chart (INIT-004/SPEC-004).** A generated
+  kick/snare/hat `.feedpak` seeds once into
+  `starter/feedBack-diagnostic-basic-drums.feedpak` via its own marker, so
+  existing installs that already have starter content still receive it.
+  It is a suggested library song, not the guitar diagnostic: it does not
+  join `BUILTIN_DIAGNOSTIC_SOURCES` and does not complete
+  `calibration_completed`.
 - **3D consumes MIDI device map (INIT-003/SPEC-013).** Bundled
   `drum_highway_3d` scores from the attached MIDI device's `notes` via
   `feedBack.midiDevices.get(profile.device_id)` on

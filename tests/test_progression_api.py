@@ -192,6 +192,22 @@ def test_low_accuracy_play_does_not_complete_gated_challenge(client):
     assert [q["id"] for q in summary["quests_completed"]] == ["d.one"]
 
 
+def test_drum_timing_pack_does_not_complete_calibration(client, server):
+    """INIT-004/SPEC-004: POST /api/stats on the drums chart is not diagnostic."""
+    drums = builtin_content.builtin_drum_timing_filename()
+    r = _scored_play(client, filename=drums, accuracy=1.0, score=500)
+    summary = r.json()["progression"]
+    assert summary["calibration_completed"] is False
+    data = client.get("/api/progression").json()
+    assert data["onboarding"]["calibration_status"] == "pending"
+    assert data["onboarding"]["diagnostic_filename"] == (
+        builtin_content.builtin_diagnostic_filename()
+    )
+    assert data["onboarding"]["diagnostic_filename"].endswith(
+        "feedBack-diagnostic-basic-guitar.sloppak"
+    )
+
+
 def test_diagnostic_at_100_completes_calibration(client, server):
     diag = builtin_content.builtin_diagnostic_filename()
     # A near-miss leaves calibration pending.

@@ -376,3 +376,106 @@ def seed_builtin_starter_content(server_root: Path, dlc: Path | None = None) -> 
             log.warning("Starter content seed: could not write marker %s: %s", marker, exc)
     except Exception:
         log.warning("Starter content seed: unexpected error", exc_info=True)
+
+
+# Drum timing chart (INIT-004/SPEC-004): a suggested 4/4 rock `.feedpak`, not
+# the guitar Mastery Rank diagnostic. Seeds into ``starter/`` via its own
+# one-shot marker so existing installs that already have
+# ``.starter-content-seeded`` still receive this dest name once; a later user
+# delete stays gone. Must not join ``BUILTIN_DIAGNOSTIC_SOURCES``.
+BUILTIN_DRUM_TIMING_SOURCES: list[tuple[str, str]] = [
+    (
+        "feedBack-diagnostic-basic-drums.feedpak",
+        "docs/diagnostics/feedBack-diagnostic-basic-drums.feedpak",
+    ),
+]
+
+
+DRUM_TIMING_SEED_MARKER = ".drum-timing-content-seeded"
+
+
+def builtin_drum_timing_filename() -> str:
+    """Stable DLC-relative id of the bundled 4/4 rock drum chart (SPEC-002)."""
+    return f"{BUILTIN_STARTER_SUBDIR}/{BUILTIN_DRUM_TIMING_SOURCES[0][0]}"
+
+
+def _seed_dest_stays_in_dir(dest_name: str) -> bool:
+    """True when ``dest_name`` cannot walk out of the seed directory.
+
+    Sources are repo-relative constants, but a dest with ``/``, ``\\``, or
+    ``..`` would let ``_copy_builtin_packs`` write outside ``starter/``.
+    """
+    if not dest_name or dest_name in {".", ".."}:
+        return False
+    if "/" in dest_name or "\\" in dest_name:
+        return False
+    return Path(dest_name).name == dest_name
+
+
+def _contained_drum_timing_sources() -> list[tuple[str, str]]:
+    safe: list[tuple[str, str]] = []
+    for dest_name, rel_source in BUILTIN_DRUM_TIMING_SOURCES:
+        if not _seed_dest_stays_in_dir(dest_name):
+            log.warning(
+                "Drum timing seed: dest name escapes starter/, skipping %s",
+                dest_name,
+            )
+            continue
+        safe.append((dest_name, rel_source))
+    return safe
+
+
+def seed_builtin_drum_timing_content(server_root: Path, dlc: Path | None = None) -> None:
+    """Copy the bundled 4/4 rock drum chart into ``DLC_DIR/starter/`` once.
+
+    Independent of ``.starter-content-seeded``. Copy-when-missing; never
+    overwrites an existing dest; never resurrects a user-deleted dest after
+    the marker is written. Symlink-safe. Logs, never raises.
+    """
+    try:
+        marker = appstate.config_dir / DRUM_TIMING_SEED_MARKER
+        try:
+            os.lstat(marker)
+            return
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("Drum timing seed: cannot stat marker %s: %s", marker, exc)
+            return
+        if dlc is None:
+            dlc = _get_dlc_dir()
+        if dlc is None:
+            log.debug("Drum timing seed: no DLC folder configured, skipping")
+            return
+        sources = _contained_drum_timing_sources()
+        if not sources:
+            log.warning("Drum timing seed: no contained dest names, skipping")
+            return
+        present = _copy_builtin_packs(
+            server_root,
+            dlc / BUILTIN_STARTER_SUBDIR,
+            sources,
+            "Drum timing seed",
+            update_existing=False,
+        )
+        if present < len(sources):
+            log.info(
+                "Drum timing seed: %d/%d packs present, will retry next launch",
+                present,
+                len(sources),
+            )
+            return
+        try:
+            appstate.config_dir.mkdir(parents=True, exist_ok=True)
+            flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(marker, flags, 0o644)
+            try:
+                os.write(fd, b"1\n")
+            finally:
+                os.close(fd)
+        except FileExistsError:
+            pass
+        except OSError as exc:
+            log.warning("Drum timing seed: could not write marker %s: %s", marker, exc)
+    except Exception:
+        log.warning("Drum timing seed: unexpected error", exc_info=True)
