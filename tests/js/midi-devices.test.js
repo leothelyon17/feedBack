@@ -1226,6 +1226,43 @@ test('writeTiming clamps |offset_ms| to 250 before PUT', async () => {
     assert.equal(puts2[puts2.length - 1].body.timing.offset_ms, -250);
 });
 
+test('writeTiming passes through finite audio_latency_hint_ms without changing offset_ms', async () => {
+    const living = deviceDoc('living-room-ekit', {
+        notes: { 36: 'kick' },
+        timing: { offset_ms: 18, origin: 'localhost', audio_backend: 'html5' },
+    });
+    const { md, calls } = fresh({ devices: [living], active: 'living-room-ekit' });
+    await settle();
+    await md().writeTiming({
+        offset_ms: 18,
+        origin: 'localhost',
+        audio_backend: 'html5',
+        audio_latency_hint_ms: 17,
+    });
+    const puts = calls.filter((c) => c.method === 'PUT' && c.url === '/api/midi/devices/living-room-ekit');
+    const last = puts[puts.length - 1].body;
+    assert.equal(last.timing.offset_ms, 18);
+    assert.equal(last.timing.audio_latency_hint_ms, 17);
+    assert.equal(Object.prototype.hasOwnProperty.call(last.timing, 'av_offset_ms'), false);
+});
+
+test('writeTiming rejects non-finite audio_latency_hint_ms', async () => {
+    const living = deviceDoc('living-room-ekit');
+    const { md, calls } = fresh({ devices: [living], active: 'living-room-ekit' });
+    await settle();
+    const before = calls.length;
+    assert.throws(
+        () => md().writeTiming({ offset_ms: 10, audio_latency_hint_ms: Number.NaN }),
+        /audio_latency_hint_ms/,
+    );
+    assert.throws(
+        () => md().writeTiming({ offset_ms: 10, audio_latency_hint_ms: Number.POSITIVE_INFINITY }),
+        /audio_latency_hint_ms/,
+    );
+    const writes = calls.slice(before).filter((c) => c.method === 'PUT');
+    assert.equal(writes.length, 0);
+});
+
 test('writeInputFields after a cached timing still sends it', async () => {
     const living = deviceDoc('living-room-ekit', {
         notes: { 36: 'kick' },

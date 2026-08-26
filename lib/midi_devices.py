@@ -42,9 +42,11 @@ _DEVICE_BODY_MAX = 64 * 1024
 _DEVICE_COUNT_MAX = 64
 _MIGRATE_SENTINEL_NAME = "overlay-kit-notes-migrated"
 # INIT-004/SPEC-006: optional Calibration persist on the device document.
+# INIT-006/SPEC-005: optional profiles[] + audio_latency_hint_ms.
 _TIMING_OFFSET_MIN_MS = -250.0
 _TIMING_OFFSET_MAX_MS = 250.0
 _TIMING_BACKENDS = frozenset({"html5", "juce"})
+_TIMING_PROFILE_KEYS = ("origin", "audio_backend", "offset_ms")
 _TIMING_CANONICAL_KEYS = (
     "offset_ms",
     "measured_at",
@@ -52,6 +54,8 @@ _TIMING_CANONICAL_KEYS = (
     "median_abs_error_ms",
     "origin",
     "audio_backend",
+    "profiles",
+    "audio_latency_hint_ms",
 )
 
 _DEFAULT_INPUT = {
@@ -147,11 +151,216 @@ def _finite_number(raw: object) -> float | None:
     return n
 
 
+def _clamp_timing_offset(offset: float) -> float:
+    if offset < _TIMING_OFFSET_MIN_MS:
+        return _TIMING_OFFSET_MIN_MS
+    if offset > _TIMING_OFFSET_MAX_MS:
+        return _TIMING_OFFSET_MAX_MS
+    return offset
+
+
+def _timing_origin(raw: object) -> str | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    return raw.strip()
+
+
+def _profile_row(origin: str, audio_backend: str, offset_ms: float) -> dict:
+    return {
+        "origin": origin,
+        "audio_backend": audio_backend,
+        "offset_ms": _clamp_timing_offset(offset_ms),
+    }
+
+
+def _cache_as_profile(timing: dict) -> dict | None:
+    """Build a profile row from a pre-INIT-006 offset_ms + tag cache."""
+    origin = _timing_origin(timing.get("origin"))
+    backend = timing.get("audio_backend")
+    offset = _finite_number(timing.get("offset_ms"))
+    if origin is None or backend not in _TIMING_BACKENDS or offset is None:
+        return None
+    return _profile_row(origin, backend, offset)
+
+
+def _dedupe_profiles(rows: list[dict]) -> list[dict]:
+    """Last value wins per {origin, audio_backend}; first-seen order."""
+    latest: dict[tuple[str, str], dict] = {}
+    order: list[tuple[str, str]] = []
+    for row in rows:
+        key = (row["origin"], row["audio_backend"])
+        if key not in latest:
+            order.append(key)
+        latest[key] = row
+    return [latest[key] for key in order]
+
+
+def _parse_timing_profile(raw: object) -> dict | None:
+    """One {origin, audio_backend, offset_ms} row, or None to skip."""
+    if not isinstance(raw, dict) or _has_dangerous_keys(raw):
+        return None
+    origin = _timing_origin(raw.get("origin"))
+    backend = raw.get("audio_backend")
+    offset = _finite_number(raw.get("offset_ms"))
+    if origin is None or backend not in _TIMING_BACKENDS or offset is None:
+        return None
+    return _profile_row(origin, backend, offset)
+
+
+def _parse_timing_profiles(raw: object) -> tuple[list[dict] | None, str | None]:
+    """Canonical profile list. None list means the key was omitted."""
+    if raw is None:
+        return None, None
+    if not isinstance(raw, list):
+        return None, "timing.profiles must be a list"
+    parsed: list[dict] = []
+    for item in raw:
+        row = _parse_timing_profile(item)
+        if row is not None:
+            parsed.append(row)
+    return _dedupe_profiles(parsed), None
+
+
+def _lookup_profile(profiles: list[dict], origin: str, audio_backend: str) -> dict | None:
+    for row in profiles:
+        if row["origin"] == origin and row["audio_backend"] == audio_backend:
+            return row
+    return None
+
+
+def active_timing_profile(
+    timing: dict | None,
+    origin: str | None = None,
+    audio_backend: str | None = None,
+) -> dict | None:
+    """Matching profile, or the cached offset_ms + tag as the active one.
+
+    Old files with only offset_ms + tag report that cache as the active
+    profile. Lookup is by {origin, audio_backend}. INIT-006/SPEC-005.
+    """
+    if not isinstance(timing, dict):
+        return None
+    want_origin = _timing_origin(origin if origin is not None else timing.get("origin"))
+    want_backend = audio_backend if audio_backend is not None else timing.get("audio_backend")
+    profiles_raw = timing.get("profiles")
+    if isinstance(profiles_raw, list) and profiles_raw:
+        if want_origin is None or want_backend not in _TIMING_BACKENDS:
+            return None
+        match = _lookup_profile(profiles_raw, want_origin, want_backend)
+        return dict(match) if match is not None else None
+    cache = _cache_as_profile(timing)
+    if cache is None:
+        offset = _finite_number(timing.get("offset_ms"))
+        if offset is None:
+            return None
+        out = {"offset_ms": _clamp_timing_offset(offset)}
+        cache_origin = _timing_origin(timing.get("origin"))
+        cache_backend = timing.get("audio_backend")
+        if origin is not None and cache_origin is not None and cache_origin != origin:
+            return None
+        if audio_backend is not None and cache_backend in _TIMING_BACKENDS and cache_backend != audio_backend:
+            return None
+        if cache_origin is not None:
+            out["origin"] = cache_origin
+        elif want_origin is not None:
+            out["origin"] = want_origin
+        if cache_backend in _TIMING_BACKENDS:
+            out["audio_backend"] = cache_backend
+        elif want_backend in _TIMING_BACKENDS:
+            out["audio_backend"] = want_backend
+        return out
+    if origin is not None and cache["origin"] != origin:
+        return None
+    if audio_backend is not None and cache["audio_backend"] != audio_backend:
+        return None
+    return dict(cache)
+
+
+def upsert_timing_profile(
+    timing: dict | None,
+    *,
+    origin: str,
+    audio_backend: str,
+    offset_ms: float,
+) -> tuple[dict | None, str | None]:
+    """Save this topology; keep other profiles; cache becomes this offset.
+
+    Does not add audio_latency_hint_ms into offset_ms. INIT-006/SPEC-005.
+    """
+    base = dict(timing) if isinstance(timing, dict) else {}
+    profiles_raw, err = _parse_timing_profiles(base.get("profiles"))
+    if err is not None:
+        return None, err
+    rows = list(profiles_raw) if profiles_raw else []
+    prior = _cache_as_profile(base)
+    if prior is not None:
+        rows.append(prior)
+    rows.append(_profile_row(origin, audio_backend, offset_ms))
+    base["profiles"] = _dedupe_profiles(rows)
+    base["offset_ms"] = offset_ms
+    base["origin"] = origin
+    base["audio_backend"] = audio_backend
+    return _normalise_timing(base)
+
+
+def select_timing_profile(
+    timing: dict,
+    origin: str,
+    audio_backend: str,
+) -> dict | None:
+    """Switch the active cache to the matching profile. Others stay.
+
+    None if no match — does not wipe the set. INIT-006/SPEC-005.
+    """
+    match = active_timing_profile(timing, origin, audio_backend)
+    if match is None or "offset_ms" not in match or "origin" not in match:
+        return None
+    if match.get("audio_backend") not in _TIMING_BACKENDS:
+        return None
+    next_raw = dict(timing) if isinstance(timing, dict) else {}
+    next_raw["offset_ms"] = match["offset_ms"]
+    next_raw["origin"] = match["origin"]
+    next_raw["audio_backend"] = match["audio_backend"]
+    if "profiles" not in next_raw:
+        cache = _cache_as_profile(timing) if isinstance(timing, dict) else None
+        rows = [cache] if cache is not None else []
+        rows.append(dict(match))
+        next_raw["profiles"] = _dedupe_profiles([r for r in rows if r is not None])
+    canonical, err = _normalise_timing(next_raw)
+    return canonical if err is None else None
+
+
+def _merge_timing_profiles(prior: dict, incoming: dict) -> dict:
+    """Keep prior topologies when a second {origin, audio_backend} is saved."""
+    rows: list[dict] = []
+    prior_rows, _ = _parse_timing_profiles(prior.get("profiles"))
+    if prior_rows:
+        rows.extend(prior_rows)
+    else:
+        cache = _cache_as_profile(prior)
+        if cache is not None:
+            rows.append(cache)
+    incoming_rows, _ = _parse_timing_profiles(incoming.get("profiles"))
+    if incoming_rows:
+        rows.extend(incoming_rows)
+    incoming_cache = _cache_as_profile(incoming)
+    if incoming_cache is not None:
+        rows.append(incoming_cache)
+    out = dict(incoming)
+    merged = _dedupe_profiles(rows)
+    if merged:
+        out["profiles"] = merged
+    else:
+        out.pop("profiles", None)
+    return {key: out[key] for key in _TIMING_CANONICAL_KEYS if key in out}
+
+
 def _normalise_timing(raw: object) -> tuple[dict | None, str | None]:
     """Canonical timing or None (Not set). Error string on reject.
 
     None / {} → Not set (not +0). offset_ms is clamped to [-250, 250].
-    Extra keys are dropped. INIT-004/SPEC-006.
+    Extra keys are dropped. Optional profiles[] and audio_latency_hint_ms
+    (INIT-006/SPEC-005). The hint never folds into offset_ms. INIT-004/SPEC-006.
     """
     if raw is None:
         return None, None
@@ -161,14 +370,36 @@ def _normalise_timing(raw: object) -> tuple[dict | None, str | None]:
         return None, "timing contains reserved keys"
     if not raw:
         return None, None
+    profiles, profiles_err = _parse_timing_profiles(raw.get("profiles"))
+    if profiles_err is not None:
+        return None, profiles_err
+    hint_present = "audio_latency_hint_ms" in raw and raw.get("audio_latency_hint_ms") is not None
+    hint = None
+    if hint_present:
+        hint = _finite_number(raw.get("audio_latency_hint_ms"))
+        if hint is None:
+            return None, "timing.audio_latency_hint_ms must be a finite number"
     offset = _finite_number(raw.get("offset_ms"))
+    backend = raw.get("audio_backend")
+    origin = raw.get("origin")
+    if origin is not None:
+        if not isinstance(origin, str) or not origin.strip():
+            return None, "timing.origin must be a non-empty string"
+        origin = origin.strip()
+    if offset is None and profiles:
+        match = None
+        if origin is not None and backend in _TIMING_BACKENDS:
+            match = _lookup_profile(profiles, origin, backend)
+        if match is None:
+            match = profiles[0]
+        offset = match["offset_ms"]
+        if origin is None:
+            origin = match["origin"]
+        if backend not in _TIMING_BACKENDS:
+            backend = match["audio_backend"]
     if offset is None:
         return None, "timing.offset_ms must be a finite number"
-    if offset < _TIMING_OFFSET_MIN_MS:
-        offset = _TIMING_OFFSET_MIN_MS
-    elif offset > _TIMING_OFFSET_MAX_MS:
-        offset = _TIMING_OFFSET_MAX_MS
-    backend = raw.get("audio_backend")
+    offset = _clamp_timing_offset(offset)
     if backend not in _TIMING_BACKENDS:
         return None, "timing.audio_backend must be html5 or juce"
     out: dict = {
@@ -190,11 +421,15 @@ def _normalise_timing(raw: object) -> tuple[dict | None, str | None]:
         if mae is None:
             return None, "timing.median_abs_error_ms must be a finite number"
         out["median_abs_error_ms"] = mae
-    origin = raw.get("origin")
     if origin is not None:
-        if not isinstance(origin, str) or not origin.strip():
-            return None, "timing.origin must be a non-empty string"
-        out["origin"] = origin.strip()
+        out["origin"] = origin
+    if profiles:
+        if origin is not None:
+            profiles = _dedupe_profiles(profiles + [_profile_row(origin, backend, offset)])
+        out["profiles"] = profiles
+    if hint is not None:
+        # Stored beside the composite; never added into offset_ms.
+        out["audio_latency_hint_ms"] = hint
     return {key: out[key] for key in _TIMING_CANONICAL_KEYS if key in out}, None
 
 
@@ -265,7 +500,7 @@ def validate_device(
     family mismatch vs the catalog, reserved keys, and a notes seed.
     Empty notes is valid. Omitted triggers default to a catalog copy so
     old on-disk devices keep loading. Optional timing is omitted when
-    unset (not +0). INIT-003/SPEC-008, INIT-004/SPEC-006.
+    unset (not +0). INIT-003/SPEC-008, INIT-004/SPEC-006, INIT-006/SPEC-005.
     """
     if not isinstance(obj, dict):
         return None, "device body must be an object"
@@ -419,7 +654,8 @@ def save_device(
 
     Omitted `timing` on an existing file preserves on-disk timing.
     Explicit `timing: null` (or `{}`) clears. Create-with-omit writes
-    no key. INIT-004/SPEC-006.
+    no key. A second {origin, audio_backend} merges into profiles and
+    keeps the first. INIT-004/SPEC-006, INIT-006/SPEC-005.
     """
     incoming_omits_timing = isinstance(obj, dict) and "timing" not in obj
     canonical, err = validate_device(obj, device_id, config_dir=config_dir)
@@ -433,11 +669,22 @@ def save_device(
         exists = dest.is_file()
         if not exists and root.is_dir() and _json_file_count(root) >= _DEVICE_COUNT_MAX:
             return None, "device count cap reached"
-        if incoming_omits_timing and exists:
+        prior = None
+        if exists:
             prior = load_device_file(dest, config_dir=config_dir)
-            if prior is not None and "timing" in prior:
-                canonical = dict(canonical)
-                canonical["timing"] = prior["timing"]
+        if incoming_omits_timing and prior is not None and "timing" in prior:
+            canonical = dict(canonical)
+            canonical["timing"] = prior["timing"]
+        elif (
+            not incoming_omits_timing
+            and "timing" in canonical
+            and prior is not None
+            and "timing" in prior
+        ):
+            canonical = dict(canonical)
+            canonical["timing"] = _merge_timing_profiles(
+                prior["timing"], canonical["timing"],
+            )
         payload = json.dumps(canonical, indent=2).encode("utf-8")
         if len(payload) > _DEVICE_BODY_MAX:
             return None, "device body exceeds 64 KiB"

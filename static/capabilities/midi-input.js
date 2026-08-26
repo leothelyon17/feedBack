@@ -93,6 +93,52 @@
 
     function _str(v, fallback) { const s = (v == null ? '' : String(v)).trim(); return s || fallback; }
 
+    // INIT-006/SPEC-002: Web MIDI is secure-context-only. localhost HTTP is
+    // secure; LAN/NAS http://<host> is not. Fail closed when the flag is false.
+    function _midiOriginIsSecure() {
+        return typeof window !== 'undefined' && window.isSecureContext === true;
+    }
+
+    function _insecureMidiWarningText() {
+        let origin = '';
+        try {
+            if (typeof location !== 'undefined' && location.origin) origin = String(location.origin);
+        } catch (_) { origin = ''; }
+        // Security AC: do not leak hostnames beyond location.origin.
+        if (origin) {
+            return 'Warning: Web MIDI needs HTTPS or localhost. This origin is not a secure context (' + origin + ').';
+        }
+        return 'Warning: Web MIDI needs HTTPS or localhost. Detect MIDI inputs is unavailable on this origin.';
+    }
+
+    function _warnInsecureMidiOrigin() {
+        const text = _insecureMidiWarningText();
+        try {
+            const doc = typeof document !== 'undefined' ? document : null;
+            if (!doc) return;
+            let el = typeof doc.getElementById === 'function' ? doc.getElementById('midi-secure-context-warning') : null;
+            if (!el && typeof doc.createElement === 'function') {
+                el = doc.createElement('p');
+                el.id = 'midi-secure-context-warning';
+                if (typeof el.setAttribute === 'function') {
+                    el.setAttribute('role', 'status');
+                    el.setAttribute('aria-live', 'polite');
+                    el.setAttribute('aria-atomic', 'true');
+                }
+                el.className = 'text-xs text-gray-300 mb-3';
+                const probe = typeof doc.getElementById === 'function' ? doc.getElementById('midi-hit-probe') : null;
+                const panel = typeof doc.getElementById === 'function' ? doc.getElementById('midi-devices-panel') : null;
+                const host = (probe && probe.parentNode) || panel || doc.body;
+                if (host && probe && typeof host.insertBefore === 'function') host.insertBefore(el, probe);
+                else if (host && typeof host.appendChild === 'function') host.appendChild(el);
+            }
+            if (!el) return;
+            el.textContent = text;
+            el.hidden = false;
+            if (el.classList && typeof el.classList.remove === 'function') el.classList.remove('hidden');
+        } catch (_) { /* warning is best-effort */ }
+    }
+
     // A stable, redaction-safe key for persistence: provider + a stable source
     // id, NOT the human device label.
     function _logicalKey(providerId, sourceId) { return `${providerId}::${sourceId}`; }
@@ -418,6 +464,12 @@
     // having to register the provider. Guarded by Web-MIDI support;
     // requestMIDIAccess() is the permission boundary, called lazily on discover.
     (function _registerBuiltinWebMidiProvider() {
+        // INIT-006/SPEC-002: warn before any requestMIDIAccess on insecure HTTP.
+        // Color is not the only signal — the copy names HTTPS or localhost.
+        if (!_midiOriginIsSecure()) {
+            _warnInsecureMidiOrigin();
+            return;
+        }
         if (typeof navigator === 'undefined' || typeof navigator.requestMIDIAccess !== 'function') return;
         const BLOCK = /(midi through|thru|iac)/i;   // loopback / passthrough ports
         let access = null;
@@ -510,6 +562,10 @@
             // a provider swap/hot-reload, leaving midi-input with no owner.
             participantId: 'core.midi-input.web-midi',
             enumerate: async () => {
+                if (!_midiOriginIsSecure()) {
+                    _warnInsecureMidiOrigin();
+                    return [];
+                }
                 if (!access) {
                     access = await navigator.requestMIDIAccess({ sysex: false });
                     try { access.onstatechange = () => { _discover(); }; } catch (_) { /* best-effort */ }
@@ -527,6 +583,10 @@
                 }));
             },
             open: async (sourceId) => {
+                if (!_midiOriginIsSecure()) {
+                    _warnInsecureMidiOrigin();
+                    throw new Error('MIDI access requires a secure origin (HTTPS or localhost)');
+                }
                 if (!access) access = await navigator.requestMIDIAccess({ sysex: false });
                 const input = _findMidiInput(access, sourceId);
                 if (!input) throw new Error('MIDI input not found');

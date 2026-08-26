@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **3D drums apply MIDI Hit detection.** Checking Settings → MIDI → Hit
+  detection now reaches the 3D highway (it previously only saved on the
+  device document). The in-play HUD says "Hit detection off" instead of
+  a silent 0/0 when scoring is gated.
+
 ### Changed
 - **Settings → Drums is Profiles first.** The 2D plugin panel is titled
   Profiles (create / rename / attach device / lane map / Make active).
@@ -44,6 +50,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **Audio output latency hint on MIDI Calibration (INIT-006/SPEC-004).**
+  Settings → MIDI Calibration probes a short-lived `AudioContext` for
+  `baseLatency + outputLatency` and shows the sum in ms as an estimate.
+  Missing, non-finite, or silent-0 figures stay **Not reported**. The
+  player override is persisted as `timing.audio_latency_hint_ms` only on
+  explicit confirm via `midiDevices.writeTiming`; judged `offset_ms` is
+  unchanged. The JUCE backend never reports Web Audio `outputLatency`.
+- **MIDI device API round-trips timing profiles and audio-latency hint
+  (INIT-006/SPEC-006).** GET `/api/midi/devices` and GET by id include
+  `timing.profiles` and `timing.audio_latency_hint_ms` when the device
+  document has them. PUT that omits `timing` still preserves every timing
+  key (offset, tag, profiles, hint). A partial `timing` body (for example
+  only `offset_ms`) deep-merges known keys and does not drop profiles or
+  the hint; unknown keys are ignored. Path containment is unchanged.
+- **MIDI device timing profiles (INIT-006/SPEC-005).** Device `timing`
+  may carry an optional `profiles` list of `{origin, audio_backend,
+  offset_ms}` and an optional `audio_latency_hint_ms`. Old files with
+  only `offset_ms` + tag still load as the active profile. Saving a
+  second topology keeps the first; `offset_ms` remains a cache of the
+  active profile. The hint round-trips separately and is never summed
+  into `offset_ms`.
+- **Named judge plane + insecure-MIDI warning (INIT-006/SPEC-002).**
+  `highway.getJudgeTime()` aliases the chart-aligned clock (`getTime()`).
+  Guitar A/V (`av_offset_ms` / `setAvOffset`) still moves gem draw time
+  (`currentTime`) only. On a non-secure origin, MIDI Detect shows a
+  visible `aria-live` warning naming HTTPS or localhost and does not
+  call `requestMIDIAccess` (`localhost` HTTP stays a secure context).
 - **3D drum highway judges on the MIDI clock (INIT-004/SPEC-005).** Bundled
   `drum_highway_3d` maps each MIDI `timeStamp` onto `highway.getTime()`,
   subtracts `feedBack.drumTiming.getOffsetMs()` (0 when that getter is

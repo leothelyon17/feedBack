@@ -158,6 +158,8 @@
 
     // INIT-004/SPEC-001: timing is an optional device field. Known keys only;
     // __proto__ / non-finite offset_ms are rejected; |offset_ms| is clamped to 250.
+    // INIT-006/SPEC-004: finite audio_latency_hint_ms passes through beside
+    // offset_ms (never summed into it).
     const OFFSET_MAX_MS = 250;
     function _sanitizeTiming(raw) {
         if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -179,6 +181,12 @@
         }
         if (Object.prototype.hasOwnProperty.call(raw, 'audio_backend') && raw.audio_backend != null) {
             out.audio_backend = String(raw.audio_backend);
+        }
+        if (Object.prototype.hasOwnProperty.call(raw, 'audio_latency_hint_ms')
+            && raw.audio_latency_hint_ms != null) {
+            const hint = Number(raw.audio_latency_hint_ms);
+            if (!Number.isFinite(hint)) throw new Error('audio_latency_hint_ms must be finite');
+            out.audio_latency_hint_ms = hint;
         }
         return out;
     }

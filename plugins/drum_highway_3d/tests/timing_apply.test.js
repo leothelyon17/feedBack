@@ -451,3 +451,31 @@ test('_midiPayloadToEvent wraps null/undefined as timeStamp 0', () => {
     assert.equal(__test._midiPayloadToEvent(null).timeStamp, 0);
     assert.equal(__test._midiPayloadToEvent(undefined).data, undefined);
 });
+
+test('device input.hit_detection hydrates 3D scoring gate', async () => {
+    const { window, __test } = load();
+    window.feedBack.midiDevices = {
+        version: 1,
+        get: async (id) => ({
+            id,
+            notes: { 38: 'snare' },
+            input: { hit_detection: true, midi_channel: 9, synth_volume: 0.4 },
+        }),
+    };
+    window.feedBack.drumInput = {
+        update() { return { revision: { clock: 1, origin: 't', sequence: 1 } }; },
+        get() { return { hitDetection: false }; },
+    };
+    assert.equal(__test._inputSettings.hitDetection, false);
+    const res = await __test._refetchDeviceNotes('dev-1');
+    assert.equal(res.ok, true);
+    assert.equal(__test._inputSettings.hitDetection, true);
+    assert.equal(__test._inputSettings.midiChannel, 9);
+});
+
+test('3D HUD names scoring-off instead of silent 0/0', () => {
+    assert.match(SCREEN_SRC, /Hit detection off/);
+    assert.match(SCREEN_SRC, /_applyDeviceInput/);
+    assert.match(SCREEN_SRC, /hit-detection-off/);
+    assert.match(SCREEN_SRC, /empty-chart/);
+});
