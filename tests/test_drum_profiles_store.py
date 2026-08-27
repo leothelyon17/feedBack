@@ -522,3 +522,145 @@ def test_validate_profile_id_override():
     canonical, err = dp.validate_profile(_profile(id="old"), profile_id="new-id")
     assert err is None
     assert canonical["id"] == "new-id"
+
+
+# ── INIT-007/SPEC-002: scoring.precision_mode persist ─────────────────────────
+
+def test_load_and_validate_missing_scoring_is_false():
+    canonical, err = dp.validate_profile(_profile())
+    assert err is None
+    assert canonical["scoring"] == {"precision_mode": False}
+    parsed = dp.load_profile_file(json.dumps(_profile()))
+    assert parsed is not None
+    assert parsed["scoring"]["precision_mode"] is False
+
+
+def test_save_load_round_trip_keeps_precision_mode_true(tmp_path: Path):
+    body = _profile(scoring={"precision_mode": True})
+    saved, err = dp.save_profile(tmp_path, body)
+    assert err is None
+    assert saved["scoring"]["precision_mode"] is True
+    dest = tmp_path / "drums" / "profiles" / "living-room.json"
+    on_disk = json.loads(dest.read_text(encoding="utf-8"))
+    assert on_disk["scoring"] == {"precision_mode": True}
+    loaded = dp.load_profile(tmp_path, "living-room")
+    assert loaded["scoring"]["precision_mode"] is True
+    assert loaded == saved
+
+
+def test_save_omit_on_existing_without_scoring_stays_false(tmp_path: Path):
+    first, err = dp.save_profile(tmp_path, _profile())
+    assert err is None
+    assert first["scoring"]["precision_mode"] is False
+    saved, err = dp.save_profile(tmp_path, _profile(name="Still default"))
+    assert err is None
+    assert saved["scoring"]["precision_mode"] is False
+    on_disk = json.loads(
+        (tmp_path / "drums" / "profiles" / "living-room.json").read_text(encoding="utf-8")
+    )
+    assert "scoring" not in on_disk
+
+
+def test_save_omitted_scoring_preserves_on_disk_true(tmp_path: Path):
+    first, err = dp.save_profile(tmp_path, _profile(scoring={"precision_mode": True}))
+    assert err is None
+    assert first["scoring"]["precision_mode"] is True
+    update = _profile(name="Renamed room")
+    assert "scoring" not in update
+    saved, err = dp.save_profile(tmp_path, update)
+    assert err is None
+    assert saved["name"] == "Renamed room"
+    assert saved["scoring"]["precision_mode"] is True
+    on_disk = json.loads(
+        (tmp_path / "drums" / "profiles" / "living-room.json").read_text(encoding="utf-8")
+    )
+    assert on_disk["scoring"]["precision_mode"] is True
+
+
+def test_explicit_false_clears_stored_precision_mode(tmp_path: Path):
+    dp.save_profile(tmp_path, _profile(scoring={"precision_mode": True}))
+    saved, err = dp.save_profile(tmp_path, _profile(scoring={"precision_mode": False}))
+    assert err is None
+    assert saved["scoring"]["precision_mode"] is False
+    on_disk = json.loads(
+        (tmp_path / "drums" / "profiles" / "living-room.json").read_text(encoding="utf-8")
+    )
+    assert "scoring" not in on_disk
+
+
+def test_precision_mode_garbage_coerces_false():
+    for garbage in ("yes", 1, "true", "True", 0, [], {}):
+        canonical, err = dp.validate_profile(_profile(scoring={"precision_mode": garbage}))
+        assert err is None, garbage
+        assert canonical["scoring"]["precision_mode"] is False, garbage
+    for raw in (None, "yes", 1, True):
+        canonical, err = dp.validate_profile(_profile(scoring=raw))
+        assert err is None, raw
+        assert canonical["scoring"]["precision_mode"] is False, raw
+
+
+def test_save_garbage_precision_mode_does_not_persist_true(tmp_path: Path):
+    saved, err = dp.save_profile(
+        tmp_path, _profile(scoring={"precision_mode": "yes"}),
+    )
+    assert err is None
+    assert saved["scoring"]["precision_mode"] is False
+    on_disk = json.loads(
+        (tmp_path / "drums" / "profiles" / "living-room.json").read_text(encoding="utf-8")
+    )
+    assert "scoring" not in on_disk
+
+
+def test_old_format_profile_without_scoring_still_loads(tmp_path: Path):
+    root = dp.profiles_dir(tmp_path)
+    root.mkdir(parents=True)
+    old = {
+        "id": "legacy",
+        "name": "Legacy",
+        "kit_id": "alesis-strata-prime",
+        "device": {"source_id": "", "enabled": False},
+        "input": {"midi_channel": -1, "hit_detection": False, "synth_volume": 0.7},
+        "highway": {
+            "2d": {"lane_preset": "phase_shift_8", "show_lane_labels": True},
+            "3d": {
+                "palette": "default",
+                "camera_angle": 0.35,
+                "theme": "default",
+                "fx": {},
+                "lanes": [],
+                "fallbacks": {},
+            },
+        },
+    }
+    dest = root / "legacy.json"
+    dest.write_text(json.dumps(old), encoding="utf-8")
+    assert "scoring" not in json.loads(dest.read_text(encoding="utf-8"))
+    loaded = dp.load_profile(tmp_path, "legacy")
+    assert loaded is not None
+    assert loaded["id"] == "legacy"
+    assert loaded["scoring"]["precision_mode"] is False
+    listed = dp.list_profiles(tmp_path)
+    assert [p["id"] for p in listed] == ["legacy"]
+    assert listed[0]["scoring"]["precision_mode"] is False
+
+
+def test_scoring_lives_at_profile_root_not_highway():
+    body = _profile()
+    body["highway"] = {
+        "2d": {"lane_preset": "phase_shift_8", "precision_mode": True},
+        "3d": {"precision_mode": True},
+    }
+    canonical, err = dp.validate_profile(body)
+    assert err is None
+    assert canonical["scoring"]["precision_mode"] is False
+
+
+def test_save_omit_preserves_nothing_when_on_disk_unreadable(tmp_path: Path):
+    dest = tmp_path / "drums" / "profiles"
+    dest.mkdir(parents=True)
+    (dest / "living-room.json").write_text("{not json", encoding="utf-8")
+    saved, err = dp.save_profile(tmp_path, _profile())
+    assert err is None
+    assert saved["scoring"]["precision_mode"] is False
+    on_disk = json.loads((dest / "living-room.json").read_text(encoding="utf-8"))
+    assert "scoring" not in on_disk

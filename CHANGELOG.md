@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **Drum profile `scoring.precision_mode` (INIT-007/SPEC-002).** Named drum
+  profiles may persist optional `scoring: { "precision_mode": true }` for
+  the tighter Precision hit window (ADR-002). Omit or `false` is Default
+  (forgiving). Old files without `scoring` still load. Non-bool values
+  (`"yes"`, `1`) coerce to `false`. A save that omits `scoring` preserves
+  a stored `true`.
 - **Audio output latency hint on MIDI Calibration (INIT-006/SPEC-004).**
   Settings → MIDI Calibration probes a short-lived `AudioContext` for
   `baseLatency + outputLatency` and shows the sum in ms as an estimate.
