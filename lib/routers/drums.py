@@ -460,6 +460,11 @@ def get_scoring_session():
 
 def _profile_public(profile: dict) -> dict:
     """Wire form — canonical store document; source_id already logical."""
+    scoring = profile.get("scoring")
+    # JSON-bool only — garbage at the store already coerced false (INIT-007/SPEC-003).
+    precision = (
+        isinstance(scoring, dict) and scoring.get("precision_mode") is True
+    )
     out = {
         "id": profile["id"],
         "name": profile.get("name") or profile["id"],
@@ -467,6 +472,7 @@ def _profile_public(profile: dict) -> dict:
         "device": profile.get("device") or {"source_id": "", "enabled": False},
         "input": profile.get("input"),
         "highway": profile.get("highway"),
+        "scoring": {"precision_mode": precision},
     }
     device_id = profile.get("device_id")
     if isinstance(device_id, str) and device_id:
@@ -510,7 +516,10 @@ def _persist_profile_from_body(body: bytes, profile_id: str | None) -> dict:
     if canonical is None:
         raise HTTPException(status_code=400, detail=err or "invalid profile")
     _require_known_kit_id(canonical.get("kit_id") or "")
-    saved, save_err = save_profile(appstate.config_dir, canonical, canonical["id"])
+    # Pass the original body, not the canonical. save_profile omit-preserves
+    # scoring.precision_mode when "scoring" is absent; canonical always has
+    # the key so a PUT-without-scoring would wipe Precision (INIT-007/SPEC-003).
+    saved, save_err = save_profile(appstate.config_dir, obj, canonical["id"])
     if saved is None:
         raise HTTPException(status_code=400, detail=save_err or "could not persist profile")
     return saved
