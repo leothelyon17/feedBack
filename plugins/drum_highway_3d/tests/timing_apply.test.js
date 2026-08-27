@@ -125,11 +125,18 @@ test('ac-3: never writes av_offset_ms / never calls setAvOffset', () => {
     assert.doesNotMatch(SCREEN_SRC, /av_offset_ms/);
 });
 
-test('ac-4: HIT_TOLERANCE_S remains 0.05', () => {
+test('ac-4: HIT_TOLERANCE_S pins both ADR-002 windows (default 0.07, precision 0.05)', () => {
+    assert.match(SCREEN_SRC, /HIT_WINDOW_DEFAULT_S = 0\.07/);
+    assert.match(SCREEN_SRC, /HIT_WINDOW_PRECISION_S = 0\.05/);
     const { __test } = load();
+    assert.equal(__test.HIT_WINDOW_DEFAULT_S, 0.07);
+    assert.equal(__test.HIT_WINDOW_PRECISION_S, 0.05);
+    assert.equal(__test.HIT_TOLERANCE_S, 0.07);
+    assert.equal(__test._applyPrecisionWindow(null), 0.07);
+    assert.equal(__test._applyPrecisionWindow({}), 0.07);
+    assert.equal(__test._applyPrecisionWindow({ scoring: { precision_mode: false } }), 0.07);
+    assert.equal(__test._applyPrecisionWindow({ scoring: { precision_mode: true } }), 0.05);
     assert.equal(__test.HIT_TOLERANCE_S, 0.05);
-    assert.match(SCREEN_SRC, /const HIT_TOLERANCE_S = 0\.05/);
-    assert.doesNotMatch(SCREEN_SRC, /HIT_TOLERANCE_S\s*=\s*0\.(?!05)\d/);
 });
 
 test('ac-5: finite drum offset does not change getAvOffset() / getTime()', () => {
@@ -478,4 +485,115 @@ test('3D HUD names scoring-off instead of silent 0/0', () => {
     assert.match(SCREEN_SRC, /_applyDeviceInput/);
     assert.match(SCREEN_SRC, /hit-detection-off/);
     assert.match(SCREEN_SRC, /empty-chart/);
+});
+
+function snareAt(t) {
+    return [{ t, lane: 1 }];
+}
+
+test('INIT-007/SPEC-005 ac-1: precision off or omitted judges at 0.07 s', () => {
+    const { __test } = load();
+    assert.equal(__test._hitToleranceFromPrecisionMode(false), 0.07);
+    assert.equal(__test._precisionModeFromProfile(null), false);
+    assert.equal(__test._precisionModeFromProfile({}), false);
+    assert.equal(__test._precisionModeFromProfile({ scoring: {} }), false);
+    assert.equal(__test._precisionModeFromProfile({ scoring: { precision_mode: false } }), false);
+    assert.equal(__test._precisionModeFromProfile({ scoring: { precision_mode: 'yes' } }), false);
+    assert.equal(__test._precisionModeFromProfile({ scoring: { precision_mode: 1 } }), false);
+    __test._applyPrecisionWindow({ scoring: { precision_mode: false } });
+    assert.equal(__test.HIT_TOLERANCE_S, 0.07);
+    const hit = __test._judgeDrumHit(38, 1060, {
+        notes: snareAt(1.0),
+        hitKeys: new Set(),
+        getTime: () => 1.06,
+        now: 1060,
+        offsetMs: 0,
+    });
+    assert.equal(hit.kind, 'hit');
+    const miss = __test._judgeDrumHit(38, 1080, {
+        notes: snareAt(1.0),
+        hitKeys: new Set(),
+        getTime: () => 1.08,
+        now: 1080,
+        offsetMs: 0,
+    });
+    assert.equal(miss.kind, 'miss');
+});
+
+test('INIT-007/SPEC-005 ac-2: precision on judges at 0.05 s', () => {
+    const { __test } = load();
+    assert.equal(__test._hitToleranceFromPrecisionMode(true), 0.05);
+    assert.equal(__test._precisionModeFromProfile({ scoring: { precision_mode: true } }), true);
+    __test._applyPrecisionWindow({ scoring: { precision_mode: true } });
+    assert.equal(__test.HIT_TOLERANCE_S, 0.05);
+    const miss = __test._judgeDrumHit(38, 1060, {
+        notes: snareAt(1.0),
+        hitKeys: new Set(),
+        getTime: () => 1.06,
+        now: 1060,
+        offsetMs: 0,
+    });
+    assert.equal(miss.kind, 'miss');
+    const hit = __test._judgeDrumHit(38, 1040, {
+        notes: snareAt(1.0),
+        hitKeys: new Set(),
+        getTime: () => 1.04,
+        now: 1040,
+        offsetMs: 0,
+    });
+    assert.equal(hit.kind, 'hit');
+});
+
+test('INIT-007/SPEC-005 ac-3: profile change event updates the live window', () => {
+    let handler;
+    let active = { id: 'p1', scoring: { precision_mode: false } };
+    const { window, __test } = load();
+    window.feedBack.drumProfiles = {
+        version: 1,
+        getActive() { return active; },
+        subscribe(fn) {
+            handler = fn;
+            return function unsub() { handler = null; };
+        },
+    };
+    __test._ensureProfileListeners();
+    assert.equal(__test.HIT_TOLERANCE_S, 0.07);
+    active = { id: 'p1', scoring: { precision_mode: true } };
+    handler({ profile_id: 'p1' });
+    assert.equal(__test.HIT_TOLERANCE_S, 0.05);
+    active = { id: 'p1' };
+    handler({ profile_id: 'p1' });
+    assert.equal(__test.HIT_TOLERANCE_S, 0.07);
+});
+
+test('INIT-007/SPEC-005 ac-3: feedback:drum-profile-change hydrates without reload', () => {
+    const listeners = {};
+    const { window, __test } = load();
+    let active = { id: 'p2', scoring: { precision_mode: true } };
+    window.feedBack.on = (name, fn) => { listeners[name] = fn; };
+    window.feedBack.off = (name) => { delete listeners[name]; };
+    window.feedBack.drumProfiles = {
+        version: 1,
+        getActive() { return active; },
+    };
+    __test._ensureProfileListeners();
+    assert.equal(typeof listeners['feedback:drum-profile-change'], 'function');
+    assert.equal(__test.HIT_TOLERANCE_S, 0.05);
+    active = { id: 'p2', scoring: { precision_mode: false } };
+    listeners['feedback:drum-profile-change']({ detail: { profile_id: 'p2' } });
+    assert.equal(__test.HIT_TOLERANCE_S, 0.07);
+});
+
+test('INIT-007/SPEC-005 ac-4: _classifyTiming stays consistent with live tolerance', () => {
+    const { __test } = load();
+    const delta = 0.025;
+    __test._applyPrecisionWindow({ scoring: { precision_mode: true } });
+    const tight = __test.HIT_TOLERANCE_S;
+    assert.equal(tight, 0.05);
+    assert.equal(__test._classifyTiming(delta, tight), 'EARLY');
+    __test._applyPrecisionWindow({ scoring: { precision_mode: false } });
+    const wide = __test.HIT_TOLERANCE_S;
+    assert.equal(wide, 0.07);
+    assert.equal(__test._classifyTiming(delta, wide), 'OK');
+    assert.match(SCREEN_SRC, /_classifyTiming\(result\.matchedDelta, HIT_TOLERANCE_S\)/);
 });

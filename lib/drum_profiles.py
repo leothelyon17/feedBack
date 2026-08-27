@@ -2,7 +2,9 @@
 
 A profile is a session (lanes + highway) that may attach to a MIDI device
 via device_id. Notes stay on the device when attached — this module has no
-notes writer. INIT-003/SPEC-001, INIT-003/SPEC-008.
+notes writer. Optional profile-root `scoring.precision_mode` (JSON bool
+only; omit/false = Default). INIT-003/SPEC-001, INIT-003/SPEC-008,
+INIT-007/SPEC-002.
 """
 
 from __future__ import annotations
@@ -48,6 +50,8 @@ _DEFAULT_HIGHWAY = {
         "fallbacks": {},
     },
 }
+# ADR-002: omit / false = Default (forgiving). Only JSON true opts into Precision.
+_DEFAULT_SCORING = {"precision_mode": False}
 
 _profile_lock = threading.Lock()
 
@@ -169,6 +173,29 @@ def _normalise_highway(raw: object) -> dict | None:
     return {"2d": two, "3d": three}
 
 
+def _normalise_scoring(raw: object) -> dict:
+    """Profile-root scoring. Only a JSON bool true enables Precision.
+
+    Missing, non-object `scoring`, and non-bool `precision_mode` (`"yes"`,
+    `1`, `"true"`) coerce to false so a garbage payload cannot widen (or
+    tighten) the window. INIT-007/SPEC-002.
+    """
+    if not isinstance(raw, dict):
+        return dict(_DEFAULT_SCORING)
+    return {"precision_mode": _as_bool(raw.get("precision_mode"), False)}
+
+
+def _scoring_for_disk(canonical: dict) -> dict:
+    """Omit `scoring` when precision_mode is false (old-format round-trip)."""
+    out = dict(canonical)
+    scoring = out.get("scoring")
+    if isinstance(scoring, dict) and scoring.get("precision_mode") is True:
+        out["scoring"] = {"precision_mode": True}
+    else:
+        out.pop("scoring", None)
+    return out
+
+
 def _device_id_ok(raw: object) -> bool:
     """Empty / omitted device_id is allowed. A set id must be a slug."""
     if raw is None:
@@ -190,7 +217,9 @@ def validate_profile(
 
     Rejects notes, owner_id, dangerous keys, bad slugs, and raw MIDI port
     labels on device.source_id. Optional device_id must name an existing
-    MIDI device when config_dir is given. INIT-003/SPEC-001, INIT-003/SPEC-008.
+    MIDI device when config_dir is given. Canonical always includes
+    scoring.precision_mode (bool; missing → false). INIT-003/SPEC-001,
+    INIT-003/SPEC-008, INIT-007/SPEC-002.
     """
     if not isinstance(obj, dict):
         return None, "profile body must be an object"
@@ -231,6 +260,7 @@ def validate_profile(
     highway = _normalise_highway(obj.get("highway"))
     if highway is None:
         return None, "highway must be an object"
+    scoring = _normalise_scoring(obj.get("scoring") if "scoring" in obj else None)
     canonical = {
         "id": pid,
         "name": name.strip(),
@@ -238,6 +268,7 @@ def validate_profile(
         "device": device,
         "input": inp,
         "highway": highway,
+        "scoring": scoring,
     }
     if device_id:
         canonical["device_id"] = device_id
@@ -320,17 +351,36 @@ def load_profile(config_dir: Path, profile_id: str) -> dict | None:
 
 
 def save_profile(config_dir: Path, obj: dict, profile_id: str | None = None) -> tuple[dict | None, str | None]:
-    """Validate and atomically write a profile. Does not write notes."""
+    """Validate and atomically write a profile. Does not write notes.
+
+    Omitted `scoring` on an existing file preserves on-disk precision_mode
+    (same omit-preserve as MIDI device `timing`). Explicit
+    `scoring.precision_mode: false` (or garbage) clears. False is omitted
+    from disk. Pass the original body, not a pre-normalized canonical, or
+    omit-preserve cannot see a missing key. INIT-007/SPEC-002.
+    """
+    incoming_omits_scoring = isinstance(obj, dict) and "scoring" not in obj
     canonical, err = validate_profile(obj, profile_id, config_dir=config_dir)
     if canonical is None:
         return None, err
     dest = profile_path(config_dir, canonical["id"])
     if dest is None:
         return None, "profile id rejected by path containment"
-    payload = json.dumps(canonical, indent=2).encode("utf-8")
-    if len(payload) > _PROFILE_BODY_MAX:
-        return None, "profile body exceeds 64 KiB"
     with _profile_lock:
+        if incoming_omits_scoring and dest.is_file():
+            prior = load_profile_file(dest, config_dir=config_dir)
+            if prior is not None:
+                prior_scoring = prior.get("scoring")
+                if (
+                    isinstance(prior_scoring, dict)
+                    and prior_scoring.get("precision_mode") is True
+                ):
+                    canonical = dict(canonical)
+                    canonical["scoring"] = {"precision_mode": True}
+        disk_doc = _scoring_for_disk(canonical)
+        payload = json.dumps(disk_doc, indent=2).encode("utf-8")
+        if len(payload) > _PROFILE_BODY_MAX:
+            return None, "profile body exceeds 64 KiB"
         try:
             _atomic_write(dest, payload)
         except OSError as exc:

@@ -1,12 +1,14 @@
 """HTTP tests for /api/drums/profiles and active_drum_profile.
 
 INIT-003/SPEC-002. Persist via lib/drum_profiles.py helpers.
+INIT-007/SPEC-003: scoring.precision_mode GET/PUT round-trip.
 """
 
 from __future__ import annotations
 
 import importlib
 import json
+import re
 import sys
 import threading
 from pathlib import Path
@@ -438,3 +440,92 @@ def test_concurrent_puts_to_different_profile_ids(client, env):
     assert results == {"alpha": 200, "beta": 200}
     listed = {p["id"] for p in client.get("/api/drums/profiles").json()["profiles"]}
     assert listed == {"alpha", "beta"}
+
+
+# ── INIT-007/SPEC-003: scoring.precision_mode HTTP round-trip ─────────────────
+
+
+def test_get_and_list_include_precision_mode_boolean(client):
+    r = client.put("/api/drums/profiles/living-room", json=_profile_body())
+    assert r.status_code == 200, r.text
+    assert r.json()["scoring"]["precision_mode"] is False
+
+    one = client.get("/api/drums/profiles/living-room")
+    assert one.status_code == 200
+    scoring = one.json()["scoring"]
+    assert scoring == {"precision_mode": False}
+    assert isinstance(scoring["precision_mode"], bool)
+
+    listed = client.get("/api/drums/profiles")
+    assert listed.status_code == 200
+    assert listed.json()["profiles"][0]["scoring"]["precision_mode"] is False
+
+
+def test_put_without_scoring_preserves_stored_precision_mode(client, env):
+    seeded = client.put(
+        "/api/drums/profiles/living-room",
+        json=_profile_body(scoring={"precision_mode": True}),
+    )
+    assert seeded.status_code == 200, seeded.text
+    assert seeded.json()["scoring"]["precision_mode"] is True
+
+    update = _profile_body(name="Renamed room")
+    update["highway"] = {
+        "2d": {"lane_preset": "rb4", "show_lane_labels": False},
+        "3d": {
+            "palette": "default",
+            "camera_angle": 0.4,
+            "theme": "default",
+            "fx": {},
+            "lanes": [],
+            "fallbacks": {},
+        },
+    }
+    assert "scoring" not in update
+    r = client.put("/api/drums/profiles/living-room", json=update)
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "Renamed room"
+    assert r.json()["scoring"]["precision_mode"] is True
+    assert r.json()["highway"]["2d"]["lane_preset"] == "rb4"
+
+    got = client.get("/api/drums/profiles/living-room")
+    assert got.status_code == 200
+    assert got.json()["scoring"]["precision_mode"] is True
+
+    _srv, tmp = env
+    on_disk = json.loads(
+        (tmp / "drums" / "profiles" / "living-room.json").read_text(encoding="utf-8")
+    )
+    assert on_disk["scoring"]["precision_mode"] is True
+
+
+def test_put_precision_mode_true_persists(client, env):
+    body = _profile_body(scoring={"precision_mode": True})
+    r = client.put("/api/drums/profiles/living-room", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["scoring"]["precision_mode"] is True
+
+    one = client.get("/api/drums/profiles/living-room")
+    assert one.status_code == 200
+    assert one.json()["scoring"]["precision_mode"] is True
+
+    listed = client.get("/api/drums/profiles")
+    assert listed.status_code == 200
+    assert listed.json()["profiles"][0]["scoring"]["precision_mode"] is True
+
+    _srv, tmp = env
+    dest = tmp / "drums" / "profiles" / "living-room.json"
+    on_disk = json.loads(dest.read_text(encoding="utf-8"))
+    assert on_disk["scoring"] == {"precision_mode": True}
+
+
+def test_drum_profile_routers_have_no_print():
+    routers = Path(__file__).resolve().parents[1] / "lib" / "routers"
+    banned = re.compile(r"(^|[^A-Za-z0-9_])(print|traceback\.print_exc)\s*\(")
+    offenders = []
+    for path in sorted(routers.rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        for i, line in enumerate(text.splitlines(), 1):
+            if banned.search(line):
+                offenders.append(f"{path.name}:{i}:{line.strip()}")
+    assert offenders == []
