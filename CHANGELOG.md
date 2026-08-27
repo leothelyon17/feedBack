@@ -50,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requestMIDIAccess()` again.
 
 ### Added
+- **3D drum hit window follows Precision (INIT-007/SPEC-005).**
+  The 3D highway default judge window is ±70 ms (0.07 s). Active profile
+  `scoring.precision_mode` true uses ±50 ms (0.05 s). A profile change
+  updates the live window without reload. Timing HUD classification uses
+  the same live tolerance.
 - **Drum profile `scoring.precision_mode` (INIT-007/SPEC-002, INIT-007/SPEC-003).**
   Named drum profiles may persist optional `scoring: { "precision_mode": true }`
   for the tighter Precision hit window (ADR-002). GET and PUT

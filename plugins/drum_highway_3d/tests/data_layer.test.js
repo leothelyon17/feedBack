@@ -89,13 +89,14 @@ test('MIDI map: open hi-hat is a first-class piece (46 → hh_open)', () => {
     assert.equal(MIDI_TO_PIECE[42], 'hh_closed');
     assert.equal(MIDI_TO_PIECE[35], 'kick');
     assert.equal(MIDI_TO_PIECE[36], 'kick');
-    // ±50 ms window matches the 2D drums plugin.
-    assert.equal(HIT_TOLERANCE_S, 0.05);
+    // INIT-007/SPEC-005: default judge window is ADR-002 Default (±70 ms).
+    assert.equal(HIT_TOLERANCE_S, 0.07);
 });
 
 test('_classifyTiming: OK band is 40% of the window, sign maps early/late', () => {
     const { _classifyTiming, HIT_TOLERANCE_S } = load().__test;
-    const tol = HIT_TOLERANCE_S;         // 0.05
+    const tol = HIT_TOLERANCE_S;         // default 0.07
+    assert.equal(tol, 0.07);
     assert.equal(_classifyTiming(0, tol), 'OK');
     assert.equal(_classifyTiming(tol * 0.4, tol), 'OK');    // boundary inclusive
     assert.equal(_classifyTiming(-tol * 0.4, tol), 'OK');

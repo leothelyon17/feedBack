@@ -553,9 +553,35 @@
         _consumeCoreVocabulary();
     }
 
-    // ±50 ms hit window — same as the 2D drums plugin so users get
-    // identical timing across both visualisations.
-    const HIT_TOLERANCE_S = 0.05;
+    // ADR-002 / INIT-007/SPEC-005: Default ±70 ms; Precision ±50 ms.
+    // Only scoring.precision_mode === true tightens the window; omit/false
+    // stay forgiving so a missing key cannot silently restore the old ±50 ms.
+    const HIT_WINDOW_DEFAULT_S = 0.07;
+    const HIT_WINDOW_PRECISION_S = 0.05;
+    let HIT_TOLERANCE_S = HIT_WINDOW_DEFAULT_S;
+
+    function _precisionModeFromProfile(profile) {
+        const scoring = profile && profile.scoring;
+        return !!(scoring && scoring.precision_mode === true);
+    }
+
+    function _hitToleranceFromPrecisionMode(on) {
+        return on === true ? HIT_WINDOW_PRECISION_S : HIT_WINDOW_DEFAULT_S;
+    }
+
+    function _applyPrecisionWindow(profile) {
+        HIT_TOLERANCE_S = _hitToleranceFromPrecisionMode(_precisionModeFromProfile(profile));
+        return HIT_TOLERANCE_S;
+    }
+
+    function _readActiveProfile() {
+        const dp = _drumProfiles();
+        return (dp && typeof dp.getActive === 'function') ? dp.getActive() : null;
+    }
+
+    function _syncPrecisionWindow() {
+        return _applyPrecisionWindow(_readActiveProfile());
+    }
 
     // INIT-004/SPEC-005: MIDI timeStamp → highway.getTime() → effective_t.
     // Conformist consumer of feedBack.drumTiming.getOffsetMs() (0 if absent).
@@ -1591,8 +1617,8 @@
         if (detail && detail.kit_id) _selectedKitId = String(detail.kit_id);
         _notifyProfilesUi();
         _ensureDeviceListeners();
-        const dp = _drumProfiles();
-        const active = dp && typeof dp.getActive === 'function' ? dp.getActive() : null;
+        const active = _readActiveProfile();
+        _applyPrecisionWindow(active);
         if (active) _applyProfileHighwayToKit(active);
         return _refetchDeviceNotes(_attachedDeviceIdFrom(detail));
     }
@@ -1606,6 +1632,7 @@
         if (dp && typeof dp.subscribe === 'function') {
             _profileUnsub = dp.subscribe(_onDrumProfileChange);
             _profileListenerCount += 1;
+            _syncPrecisionWindow();
             _ensureDeviceListeners();
             return;
         }
@@ -1619,6 +1646,7 @@
             };
             _profileListenerCount += 1;
         }
+        _syncPrecisionWindow();
         _ensureDeviceListeners();
     }
 
@@ -1626,6 +1654,7 @@
         _ensureProfileListeners();
         const dp = _drumProfiles();
         if (!dp || typeof dp.list !== 'function') {
+            _syncPrecisionWindow();
             _notifyProfilesUi();
             return { ok: false, missing: true };
         }
@@ -1633,6 +1662,7 @@
             const list = await dp.list();
             _profileList = Array.isArray(list) ? list : [];
             const active = typeof dp.getActive === 'function' ? dp.getActive() : null;
+            _applyPrecisionWindow(active);
             if (active && active.id && !_selectedProfileId) _selectedProfileId = String(active.id);
             if (active) _applyProfileHighwayToKit(active);
             _notifyProfilesUi();
@@ -4997,7 +5027,14 @@
         MIDI_TO_PIECE,
         ALL_PIECES,
         LS_KIT_CONFIG,
-        HIT_TOLERANCE_S,
+        HIT_WINDOW_DEFAULT_S,
+        HIT_WINDOW_PRECISION_S,
+        get HIT_TOLERANCE_S() { return HIT_TOLERANCE_S; },
+        _precisionModeFromProfile,
+        _hitToleranceFromPrecisionMode,
+        _applyPrecisionWindow,
+        _syncPrecisionWindow,
+        _readActiveProfile,
         _nowMs,
         _highwayGetTime,
         _readDrumOffsetMs,
@@ -5110,6 +5147,7 @@
             };
             _profileList = [];
             _selectedProfileId = null;
+            HIT_TOLERANCE_S = HIT_WINDOW_DEFAULT_S;
             _deviceNotesLocked = false;
             _attachedDeviceId = null;
             _applyActiveKitNotes(null);
